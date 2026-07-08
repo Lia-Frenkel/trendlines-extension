@@ -175,10 +175,20 @@
   }
   .card-chart {
     width: 100%;
-    height: 110px;
+    height: 121px;
     display: block;
     overflow: visible;
     cursor: default;
+  }
+  .data-label {
+    font-size: 8px;
+    font-weight: 600;
+    fill: var(--ink);
+    pointer-events: none;
+    display: none;
+  }
+  .grid.labels-visible .data-label {
+    display: block;
   }
   .axis-row {
     display: flex;
@@ -254,6 +264,12 @@
   var TRAILING_N = { trailing7: 7, trailing14: 14, trailing21: 21, trailing28: 28, trailing35: 35 };
   var INCOMPLETE_RELEVANT = ['weekly', 'monthly', 'quarterly', 'yearly'];
   var WEEK_START_PARAMETER_NAME = 'Week Start Day';
+  var CHART_WIDTH = 300;
+  var CHART_HEIGHT = 100;
+  var CHART_PAD_TOP = 10;
+  var CHART_PAD_BOTTOM = 14;
+  var CHART_PAD_X = 6;
+  var LABEL_MIN_PX_PER_POINT = 44;
 
   var appEl = document.getElementById('app');
   var gridEl = null;
@@ -295,6 +311,41 @@
   function stripAggregation(name) {
     var m = /^[A-Za-z_][A-Za-z0-9_]*\((.*)\)$/.exec(name);
     return m ? m[1] : name;
+  }
+
+  // Reverse-engineers a metric's Tableau number format (currency symbol, %,
+  // decimals, thousands separator) by comparing a raw value against its
+  // formattedValue, so bucketed sums render with the same formatting the
+  // workbook already applies instead of needing a manual format picker.
+  function detectFormat(rawValue, formattedValue) {
+    if (rawValue === null || rawValue === undefined || rawValue === 0 || !formattedValue) return null;
+    var match = /^([^0-9-]*)(-?[0-9,]*\.?[0-9]*)([^0-9]*)$/.exec(formattedValue);
+    if (!match) return null;
+    var prefix = match[1] || '';
+    var numPart = match[2] || '';
+    var suffix = match[3] || '';
+    var parsedNum = parseFloat(numPart.replace(/,/g, ''));
+    if (isNaN(parsedNum)) return null;
+    var multiplier = parsedNum / rawValue;
+    if (!isFinite(multiplier)) return null;
+    var decimalMatch = /\.([0-9]+)$/.exec(numPart);
+    return {
+      prefix: prefix,
+      suffix: suffix,
+      multiplier: multiplier,
+      decimals: decimalMatch ? decimalMatch[1].length : 0,
+      thousands: numPart.indexOf(',') !== -1
+    };
+  }
+
+  function formatMetricValue(fmt, value) {
+    if (value === null || value === undefined || isNaN(value)) return 'No data';
+    if (!fmt) return value.toLocaleString(undefined, { maximumFractionDigits: 2 });
+    var scaled = value * fmt.multiplier;
+    var numStr = fmt.thousands
+      ? scaled.toLocaleString(undefined, { minimumFractionDigits: fmt.decimals, maximumFractionDigits: fmt.decimals })
+      : scaled.toFixed(fmt.decimals);
+    return fmt.prefix + numStr + fmt.suffix;
   }
 
   // Picks the time/dimension column and the metric (measure) columns from
@@ -446,19 +497,29 @@
     var columns = dataTable.columns;
 
     metricColumns = picked.metricIndexes.map(function (colIndex) {
-      return { index: colIndex, name: stripAggregation(columns[colIndex].fieldName) };
+      return { index: colIndex, name: stripAggregation(columns[colIndex].fieldName), format: null };
     });
+
+    var formatSamples = metricColumns.map(function () { return null; });
 
     rawRows = [];
     rows.forEach(function (row) {
       var dateUTC = cellToUTCDate(row[picked.timeIndex]);
       if (!dateUTC) return;
-      var values = metricColumns.map(function (mc) {
+      var values = metricColumns.map(function (mc, i) {
         var cell = row[mc.index];
         var v = cell && cell.value !== null && cell.value !== undefined ? Number(cell.value) : null;
+        if (v !== null && !isNaN(v) && (!formatSamples[i] || Math.abs(v) > Math.abs(formatSamples[i].value))) {
+          formatSamples[i] = { value: v, formattedValue: cell.formattedValue };
+        }
         return v === null || isNaN(v) ? null : v;
       });
       rawRows.push({ dateUTC: dateUTC, values: values });
+    });
+
+    metricColumns.forEach(function (mc, i) {
+      var sample = formatSamples[i];
+      mc.format = sample ? detectFormat(sample.value, sample.formattedValue) : null;
     });
   }
 
@@ -509,6 +570,7 @@
     lastMetrics = metricColumns.map(function (mc, i) {
       return {
         name: mc.name,
+        format: mc.format,
         values: bucketList.map(function (b) { return b.counts[i] > 0 ? b.sums[i] : null; })
       };
     });
@@ -530,11 +592,6 @@
       idxs.push(Math.round((t * (n - 1)) / (maxTicks - 1)));
     }
     return idxs.filter(function (v, i, a) { return a.indexOf(v) === i; });
-  }
-
-  function formatValue(v) {
-    if (v === null || v === undefined || isNaN(v)) return 'No data';
-    return v.toLocaleString(undefined, { maximumFractionDigits: 2 });
   }
 
   // Catmull-Rom -> cubic Bezier, so lines read as soft curves instead of
@@ -585,7 +642,7 @@
       }
       var x = n === 1 ? padX : padX + (i / (n - 1)) * innerW;
       var y = padTop + innerH - ((v - min) / (max - min)) * innerH;
-      current.push([x, y]);
+      current.push([x, y, v]);
     }
     if (current.length) segments.push(current);
 
@@ -593,11 +650,11 @@
   }
 
   function renderCard(metric, timeLabels, gradId) {
-    var width = 300;
-    var height = 100;
-    var padTop = 10;
-    var padBottom = 14;
-    var padX = 6;
+    var width = CHART_WIDTH;
+    var height = CHART_HEIGHT;
+    var padTop = CHART_PAD_TOP;
+    var padBottom = CHART_PAD_BOTTOM;
+    var padX = CHART_PAD_X;
 
     var geo = buildGeometry(metric.values, width, height, padTop, padBottom, padX);
 
@@ -656,6 +713,16 @@
 
     svg.appendChild(defs);
 
+    function addDataLabel(pt) {
+      var label = document.createElementNS(svgNs, 'text');
+      label.setAttribute('class', 'data-label');
+      label.setAttribute('x', pt[0].toFixed(2));
+      label.setAttribute('y', (pt[1] - 6).toFixed(2));
+      label.setAttribute('text-anchor', 'middle');
+      label.textContent = formatMetricValue(metric.format, pt[2]);
+      svg.appendChild(label);
+    }
+
     geo.segments.forEach(function (pts) {
       if (pts.length === 1) {
         // A single-point segment (e.g. one bucket of data) has no line to
@@ -666,6 +733,7 @@
         dot.setAttribute('r', '3.5');
         dot.setAttribute('fill', BLUE);
         svg.appendChild(dot);
+        addDataLabel(pts[0]);
         return;
       }
 
@@ -689,6 +757,8 @@
       linePathEl.setAttribute('stroke-linejoin', 'round');
       linePathEl.setAttribute('vector-effect', 'non-scaling-stroke');
       svg.appendChild(linePathEl);
+
+      pts.forEach(addDataLabel);
     });
 
     svg.addEventListener('dragstart', function (e) {
@@ -701,7 +771,7 @@
       var n = metric.values.length;
       var idx = n > 1 ? Math.round(((xInViewBox - padX) / (width - padX * 2)) * (n - 1)) : 0;
       idx = Math.max(0, Math.min(n - 1, idx));
-      showTooltip(e.clientX, e.clientY, timeLabels[idx], metric.name, metric.values[idx]);
+      showTooltip(e.clientX, e.clientY, timeLabels[idx], metric.name, metric.values[idx], metric.format);
     });
     svg.addEventListener('mouseleave', function () {
       hideTooltip();
@@ -762,10 +832,10 @@
     });
   }
 
-  function showTooltip(clientX, clientY, dateLabel, metricName, value) {
+  function showTooltip(clientX, clientY, dateLabel, metricName, value, fmt) {
     if (!tooltipEl) return;
     tooltipEl.innerHTML = '<div class="tt-date">' + dateLabel + '</div>' +
-      '<div><span class="tt-metric">' + metricName + ':</span> ' + formatValue(value) + '</div>';
+      '<div><span class="tt-metric">' + metricName + ':</span> ' + formatMetricValue(fmt, value) + '</div>';
     tooltipEl.classList.add('visible');
     var left = clientX + 14;
     var top = clientY - 14;
@@ -826,6 +896,29 @@
     ordered.forEach(function (metric, i) {
       gridEl.appendChild(renderCard(metric, lastTimeLabels, i));
     });
+
+    updateLabelVisibility();
+  }
+
+  // Data labels only read well when there's enough horizontal room per
+  // point; density depends on both charts-per-row and how many buckets are
+  // in view, so decide from the actual rendered card width rather than a
+  // fixed rule of thumb.
+  function updateLabelVisibility() {
+    if (!gridEl) return;
+    var n = lastTimeLabels.length;
+    if (n <= 1) {
+      gridEl.classList.toggle('labels-visible', n === 1);
+      return;
+    }
+    var firstCard = gridEl.querySelector('.card');
+    if (!firstCard) return;
+    var cardWidth = firstCard.getBoundingClientRect().width;
+    if (!cardWidth) return;
+    var scale = cardWidth / CHART_WIDTH;
+    var innerW = CHART_WIDTH - CHART_PAD_X * 2;
+    var pxPerPoint = (innerW / (n - 1)) * scale;
+    gridEl.classList.toggle('labels-visible', pxPerPoint >= LABEL_MIN_PX_PER_POINT);
   }
 
   function updateToolbarVisibility() {
@@ -1054,6 +1147,12 @@
       showMessage('Error loading data: ' + (err && err.message ? err.message : err));
     });
   }
+
+  var resizeTimer = null;
+  window.addEventListener('resize', function () {
+    clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(updateLabelVisibility, 150);
+  });
 
   tableau.extensions.initializeAsync().then(function () {
     var worksheet = tableau.extensions.worksheetContent.worksheet;
