@@ -36,9 +36,19 @@
   }
   .toolbar {
     display: flex;
-    align-items: center;
+    flex-wrap: wrap;
+    align-items: flex-end;
     justify-content: flex-end;
-    margin-bottom: 14px;
+    gap: 14px 20px;
+    margin-bottom: 16px;
+  }
+  .toolbar-group {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+  .toolbar-group.hidden {
+    display: none;
   }
   .toolbar-control {
     display: flex;
@@ -46,9 +56,40 @@
     gap: 10px;
   }
   .toolbar-label {
-    font-size: 12px;
+    font-size: 10px;
     color: var(--muted);
-    font-weight: 500;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+  }
+  .control {
+    border: none;
+    border-radius: 10px;
+    background: #FFFFFF;
+    box-shadow: 0 2px 8px rgba(28, 37, 68, 0.07);
+    padding: 6px 10px;
+    font-size: 12px;
+    color: var(--ink);
+    font-family: inherit;
+    outline: none;
+    cursor: pointer;
+  }
+  .checkbox-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    height: 30px;
+  }
+  .checkbox-row input[type="checkbox"] {
+    accent-color: var(--purple);
+    width: 14px;
+    height: 14px;
+    cursor: pointer;
+  }
+  .checkbox-row label {
+    font-size: 12px;
+    color: var(--ink);
+    cursor: pointer;
   }
   .segmented {
     display: flex;
@@ -121,6 +162,12 @@
     margin-top: 2px;
     padding: 0 2px;
   }
+  .grid-message {
+    grid-column: 1 / -1;
+    color: var(--muted);
+    font-size: 13px;
+    padding: 20px;
+  }
 </style>
 </head>
 <body>
@@ -134,21 +181,47 @@
   'use strict';
 
   var MIN_CHARTS_PER_ROW = 3;
-  var MAX_CHARTS_PER_ROW = 6;
+  var MAX_CHARTS_PER_ROW = 5;
   var DEFAULT_CHARTS_PER_ROW = 4;
   var PURPLE = '#7B61FF';
   var BLUE = '#4C82FB';
+  var MONTH_ABBR = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  var DAY_MS = 86400000;
+
+  var GRANULARITY_OPTIONS = [
+    { value: 'daily', label: 'Daily' },
+    { value: 'weekly', label: 'Weekly' },
+    { value: 'monthly', label: 'Monthly' },
+    { value: 'quarterly', label: 'Quarterly' },
+    { value: 'yearly', label: 'Yearly' },
+    { value: 'trailing7', label: 'Trailing 7 Days' },
+    { value: 'trailing14', label: 'Trailing 14 Days' },
+    { value: 'trailing21', label: 'Trailing 21 Days' },
+    { value: 'trailing28', label: 'Trailing 28 Days' },
+    { value: 'trailing35', label: 'Trailing 35 Days' }
+  ];
+  var TRAILING_N = { trailing7: 7, trailing14: 14, trailing21: 21, trailing28: 28, trailing35: 35 };
+  var WEEK_START_RELEVANT = ['weekly', 'trailing7', 'trailing14', 'trailing21', 'trailing28', 'trailing35'];
+  var INCOMPLETE_RELEVANT = ['weekly', 'monthly', 'quarterly', 'yearly'];
 
   var appEl = document.getElementById('app');
   var gridEl = null;
+  var toolbarEls = {};
   var appBuilt = false;
   var dragSrcName = null;
 
   var state = {
     chartsPerRow: DEFAULT_CHARTS_PER_ROW,
-    order: []
+    order: [],
+    granularity: 'weekly',
+    weekStartDay: 0,
+    hideIncomplete: false,
+    startDate: null,
+    endDate: null
   };
 
+  var rawRows = [];
+  var metricColumns = [];
   var lastMetrics = [];
   var lastTimeLabels = [];
 
@@ -165,6 +238,11 @@
 
   function isDateType(dataType) {
     return dataType === 'date' || dataType === 'date-time';
+  }
+
+  function stripAggregation(name) {
+    var m = /^[A-Za-z_][A-Za-z0-9_]*\((.*)\)$/.exec(name);
+    return m ? m[1] : name;
   }
 
   // Picks the time/dimension column and the metric (measure) columns from
@@ -200,12 +278,192 @@
     return { timeIndex: timeIndex, metricIndexes: numericCols };
   }
 
-  function timeSortValue(cell) {
-    if (cell.value === null || cell.value === undefined) return 0;
+  function cellToUTCDate(cell) {
+    if (!cell || cell.value === null || cell.value === undefined) return null;
     var d = new Date(cell.value);
-    if (!isNaN(d.getTime())) return d.getTime();
-    var n = Number(cell.value);
-    return isNaN(n) ? 0 : n;
+    if (isNaN(d.getTime())) return null;
+    return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()));
+  }
+
+  function todayUTC() {
+    var now = new Date();
+    return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+  }
+
+  function addDays(d, n) {
+    var r = new Date(d.getTime());
+    r.setUTCDate(r.getUTCDate() + n);
+    return r;
+  }
+
+  function addMonths(d, n) {
+    return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + n, d.getUTCDate()));
+  }
+
+  function startOfWeek(d, weekStartDay) {
+    var day = d.getUTCDay();
+    var diff = (day - weekStartDay + 7) % 7;
+    return addDays(d, -diff);
+  }
+
+  function startOfMonth(d) {
+    return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), 1));
+  }
+
+  function startOfQuarter(d) {
+    var q = Math.floor(d.getUTCMonth() / 3);
+    return new Date(Date.UTC(d.getUTCFullYear(), q * 3, 1));
+  }
+
+  function startOfYear(d) {
+    return new Date(Date.UTC(d.getUTCFullYear(), 0, 1));
+  }
+
+  function pad2(n) {
+    return n < 10 ? '0' + n : String(n);
+  }
+
+  function formatDaily(d) {
+    return d.getUTCDate() + ' ' + MONTH_ABBR[d.getUTCMonth()] + ' ' + d.getUTCFullYear();
+  }
+
+  function formatMonthly(d) {
+    return MONTH_ABBR[d.getUTCMonth()] + ' ' + d.getUTCFullYear();
+  }
+
+  function formatQuarterly(d) {
+    var q = Math.floor(d.getUTCMonth() / 3) + 1;
+    return 'Q' + q + ' ' + d.getUTCFullYear();
+  }
+
+  function formatYearly(d) {
+    return String(d.getUTCFullYear());
+  }
+
+  function dateInputToUTC(str) {
+    if (!str) return null;
+    var parts = str.split('-').map(Number);
+    if (parts.length !== 3 || parts.some(isNaN)) return null;
+    return new Date(Date.UTC(parts[0], parts[1] - 1, parts[2]));
+  }
+
+  function utcToDateInputValue(d) {
+    if (!d) return '';
+    return d.getUTCFullYear() + '-' + pad2(d.getUTCMonth() + 1) + '-' + pad2(d.getUTCDate());
+  }
+
+  // Ports the user's Tableau DATETRUNC/DATEDIFF-based granularity calculated
+  // field into JS bucket keys, so the extension buckets dates itself instead
+  // of requiring one Tableau calculated field per granularity.
+  function computeBucket(dateUTC, granularity, weekStartDay, today) {
+    switch (granularity) {
+      case 'daily':
+        return { sortValue: dateUTC.getTime(), label: formatDaily(dateUTC), periodEnd: dateUTC };
+      case 'weekly': {
+        var wStart = startOfWeek(dateUTC, weekStartDay);
+        return { sortValue: wStart.getTime(), label: formatDaily(wStart), periodEnd: addDays(wStart, 6) };
+      }
+      case 'monthly': {
+        var mStart = startOfMonth(dateUTC);
+        return { sortValue: mStart.getTime(), label: formatMonthly(mStart), periodEnd: addDays(addMonths(mStart, 1), -1) };
+      }
+      case 'quarterly': {
+        var qStart = startOfQuarter(dateUTC);
+        return { sortValue: qStart.getTime(), label: formatQuarterly(qStart), periodEnd: addDays(addMonths(qStart, 3), -1) };
+      }
+      case 'yearly': {
+        var yStart = startOfYear(dateUTC);
+        return { sortValue: yStart.getTime(), label: formatYearly(yStart), periodEnd: new Date(Date.UTC(yStart.getUTCFullYear(), 11, 31)) };
+      }
+      default: {
+        var n = TRAILING_N[granularity];
+        var todayDays = Math.round(today.getTime() / DAY_MS);
+        var dateDays = Math.round(dateUTC.getTime() / DAY_MS);
+        if (todayDays - dateDays <= n) {
+          return { sortValue: 0, label: ' Last ' + n + ' Days', periodEnd: null };
+        }
+        var periodsAgo = Math.abs(Math.floor((dateDays - todayDays) / n) + 1);
+        var label = (periodsAgo < 10 ? '0' + periodsAgo : String(periodsAgo)) + ' Periods Ago';
+        return { sortValue: -periodsAgo, label: label, periodEnd: null };
+      }
+    }
+  }
+
+  function parseRawRows(dataTable, picked) {
+    var rows = dataTable.data;
+    var columns = dataTable.columns;
+
+    metricColumns = picked.metricIndexes.map(function (colIndex) {
+      return { index: colIndex, name: stripAggregation(columns[colIndex].fieldName) };
+    });
+
+    rawRows = [];
+    rows.forEach(function (row) {
+      var dateUTC = cellToUTCDate(row[picked.timeIndex]);
+      if (!dateUTC) return;
+      var values = metricColumns.map(function (mc) {
+        var cell = row[mc.index];
+        var v = cell && cell.value !== null && cell.value !== undefined ? Number(cell.value) : null;
+        return v === null || isNaN(v) ? null : v;
+      });
+      rawRows.push({ dateUTC: dateUTC, values: values });
+    });
+  }
+
+  function ensureDefaultDateRange() {
+    if (state.startDate && state.endDate) return;
+    var today = todayUTC();
+    var currentWeekStart = startOfWeek(today, state.weekStartDay);
+    state.startDate = state.startDate || utcToDateInputValue(addDays(currentWeekStart, -14 * 7));
+    state.endDate = state.endDate || utcToDateInputValue(today);
+  }
+
+  function recomputeAndRenderData() {
+    var today = todayUTC();
+    var startUTC = dateInputToUTC(state.startDate);
+    var endUTC = dateInputToUTC(state.endDate);
+
+    var filtered = rawRows.filter(function (r) {
+      if (startUTC && r.dateUTC.getTime() < startUTC.getTime()) return false;
+      if (endUTC && r.dateUTC.getTime() > endUTC.getTime()) return false;
+      return true;
+    });
+
+    var buckets = {};
+    filtered.forEach(function (r) {
+      var b = computeBucket(r.dateUTC, state.granularity, state.weekStartDay, today);
+      var key = String(b.sortValue);
+      if (!buckets[key]) {
+        var incomplete = INCOMPLETE_RELEVANT.indexOf(state.granularity) !== -1 && b.periodEnd && b.periodEnd.getTime() >= today.getTime();
+        buckets[key] = { sortValue: b.sortValue, label: b.label, incomplete: incomplete, sums: metricColumns.map(function () { return 0; }), counts: metricColumns.map(function () { return 0; }) };
+      }
+      r.values.forEach(function (v, i) {
+        if (v !== null) {
+          buckets[key].sums[i] += v;
+          buckets[key].counts[i] += 1;
+        }
+      });
+    });
+
+    var bucketList = Object.keys(buckets).map(function (k) { return buckets[k]; });
+
+    if (state.hideIncomplete && INCOMPLETE_RELEVANT.indexOf(state.granularity) !== -1) {
+      bucketList = bucketList.filter(function (b) { return !b.incomplete; });
+    }
+
+    bucketList.sort(function (a, b) { return a.sortValue - b.sortValue; });
+
+    lastTimeLabels = bucketList.map(function (b) { return b.label; });
+    lastMetrics = metricColumns.map(function (mc, i) {
+      return {
+        name: mc.name,
+        values: bucketList.map(function (b) { return b.counts[i] > 0 ? b.sums[i] : null; })
+      };
+    });
+
+    if (!appBuilt) buildApp();
+    updateToolbarVisibility();
+    renderGrid();
   }
 
   function pickTickIndices(n, maxTicks) {
@@ -279,8 +537,8 @@
 
   function renderCard(metric, timeLabels, gradId) {
     var width = 300;
-    var height = 110;
-    var padTop = 26;
+    var height = 100;
+    var padTop = 10;
     var padBottom = 14;
     var padX = 6;
 
@@ -341,7 +599,6 @@
 
     svg.appendChild(defs);
 
-    var lastPoint = null;
     geo.segments.forEach(function (pts) {
       var linePath = segmentToLinePath(pts);
 
@@ -365,55 +622,7 @@
       linePathEl.setAttribute('stroke-linejoin', 'round');
       linePathEl.setAttribute('vector-effect', 'non-scaling-stroke');
       svg.appendChild(linePathEl);
-
-      lastPoint = pts[pts.length - 1];
     });
-
-    if (lastPoint) {
-      var dot = document.createElementNS(svgNs, 'circle');
-      dot.setAttribute('cx', lastPoint[0].toFixed(2));
-      dot.setAttribute('cy', lastPoint[1].toFixed(2));
-      dot.setAttribute('r', '3.5');
-      dot.setAttribute('fill', BLUE);
-      dot.setAttribute('stroke', '#FFFFFF');
-      dot.setAttribute('stroke-width', '1.5');
-      svg.appendChild(dot);
-
-      var lastFormatted = metric.formatted[metric.formatted.length - 1] || '';
-      var pillWidth = Math.max(28, lastFormatted.length * 6 + 12);
-      var pillHeight = 16;
-      var pillX = Math.min(Math.max(lastPoint[0] - pillWidth / 2, 2), width - pillWidth - 2);
-      var pillY = 2;
-
-      var connector = document.createElementNS(svgNs, 'line');
-      connector.setAttribute('x1', lastPoint[0].toFixed(2));
-      connector.setAttribute('y1', (pillY + pillHeight).toFixed(2));
-      connector.setAttribute('x2', lastPoint[0].toFixed(2));
-      connector.setAttribute('y2', lastPoint[1].toFixed(2));
-      connector.setAttribute('stroke', '#C7CCE3');
-      connector.setAttribute('stroke-width', '1');
-      connector.setAttribute('stroke-dasharray', '2,2');
-      svg.appendChild(connector);
-
-      var pillRect = document.createElementNS(svgNs, 'rect');
-      pillRect.setAttribute('x', pillX.toFixed(2));
-      pillRect.setAttribute('y', pillY.toFixed(2));
-      pillRect.setAttribute('width', pillWidth.toFixed(2));
-      pillRect.setAttribute('height', pillHeight.toFixed(2));
-      pillRect.setAttribute('rx', '8');
-      pillRect.setAttribute('fill', '#1C2544');
-      svg.appendChild(pillRect);
-
-      var pillText = document.createElementNS(svgNs, 'text');
-      pillText.setAttribute('x', (pillX + pillWidth / 2).toFixed(2));
-      pillText.setAttribute('y', (pillY + pillHeight / 2 + 3.5).toFixed(2));
-      pillText.setAttribute('text-anchor', 'middle');
-      pillText.setAttribute('font-size', '9');
-      pillText.setAttribute('font-weight', '600');
-      pillText.setAttribute('fill', '#FFFFFF');
-      pillText.textContent = lastFormatted;
-      svg.appendChild(pillText);
-    }
 
     card.appendChild(svg);
 
@@ -494,24 +703,138 @@
     if (!gridEl) return;
     gridEl.style.gridTemplateColumns = 'repeat(' + state.chartsPerRow + ', 1fr)';
     gridEl.innerHTML = '';
+
+    if (lastMetrics.length === 0 || lastTimeLabels.length === 0) {
+      var msg = document.createElement('div');
+      msg.className = 'grid-message';
+      msg.textContent = 'No data in the selected date range.';
+      gridEl.appendChild(msg);
+      return;
+    }
+
     var ordered = applyOrder(lastMetrics);
     ordered.forEach(function (metric, i) {
       gridEl.appendChild(renderCard(metric, lastTimeLabels, i));
     });
   }
 
+  function updateToolbarVisibility() {
+    if (toolbarEls.weekStartGroup) {
+      toolbarEls.weekStartGroup.classList.toggle('hidden', WEEK_START_RELEVANT.indexOf(state.granularity) === -1);
+    }
+    if (toolbarEls.incompleteGroup) {
+      toolbarEls.incompleteGroup.classList.toggle('hidden', INCOMPLETE_RELEVANT.indexOf(state.granularity) === -1);
+    }
+  }
+
+  function buildToolbarGroup(labelText) {
+    var group = document.createElement('div');
+    group.className = 'toolbar-group';
+    var label = document.createElement('span');
+    label.className = 'toolbar-label';
+    label.textContent = labelText;
+    group.appendChild(label);
+    return group;
+  }
+
   function buildToolbar() {
     var toolbar = document.createElement('div');
     toolbar.className = 'toolbar';
 
-    var control = document.createElement('div');
-    control.className = 'toolbar-control';
+    // Granularity
+    var granGroup = buildToolbarGroup('Timeframe');
+    var granSelect = document.createElement('select');
+    granSelect.className = 'control';
+    GRANULARITY_OPTIONS.forEach(function (opt) {
+      var o = document.createElement('option');
+      o.value = opt.value;
+      o.textContent = opt.label;
+      if (opt.value === state.granularity) o.selected = true;
+      granSelect.appendChild(o);
+    });
+    granSelect.addEventListener('change', function () {
+      state.granularity = granSelect.value;
+      saveSettings();
+      updateToolbarVisibility();
+      recomputeAndRenderData();
+    });
+    granGroup.appendChild(granSelect);
+    toolbar.appendChild(granGroup);
 
-    var label = document.createElement('span');
-    label.className = 'toolbar-label';
-    label.textContent = 'Charts per row';
-    control.appendChild(label);
+    // Week start day
+    var weekGroup = buildToolbarGroup('Week Starts On');
+    var weekSelect = document.createElement('select');
+    weekSelect.className = 'control';
+    [{ value: 0, label: 'Sunday' }, { value: 1, label: 'Monday' }].forEach(function (opt) {
+      var o = document.createElement('option');
+      o.value = String(opt.value);
+      o.textContent = opt.label;
+      if (opt.value === state.weekStartDay) o.selected = true;
+      weekSelect.appendChild(o);
+    });
+    weekSelect.addEventListener('change', function () {
+      state.weekStartDay = parseInt(weekSelect.value, 10);
+      saveSettings();
+      recomputeAndRenderData();
+    });
+    weekGroup.appendChild(weekSelect);
+    toolbar.appendChild(weekGroup);
+    toolbarEls.weekStartGroup = weekGroup;
 
+    // Start date
+    var startGroup = buildToolbarGroup('Start Date');
+    var startInput = document.createElement('input');
+    startInput.type = 'date';
+    startInput.className = 'control';
+    startInput.value = state.startDate;
+    startInput.addEventListener('change', function () {
+      state.startDate = startInput.value;
+      saveSettings();
+      recomputeAndRenderData();
+    });
+    startGroup.appendChild(startInput);
+    toolbar.appendChild(startGroup);
+    toolbarEls.startInput = startInput;
+
+    // End date
+    var endGroup = buildToolbarGroup('End Date');
+    var endInput = document.createElement('input');
+    endInput.type = 'date';
+    endInput.className = 'control';
+    endInput.value = state.endDate;
+    endInput.addEventListener('change', function () {
+      state.endDate = endInput.value;
+      saveSettings();
+      recomputeAndRenderData();
+    });
+    endGroup.appendChild(endInput);
+    toolbar.appendChild(endGroup);
+    toolbarEls.endInput = endInput;
+
+    // Hide incomplete period
+    var incompleteGroup = buildToolbarGroup(' ');
+    var checkboxRow = document.createElement('div');
+    checkboxRow.className = 'checkbox-row';
+    var checkbox = document.createElement('input');
+    checkbox.type = 'checkbox';
+    checkbox.id = 'hideIncompleteCheckbox';
+    checkbox.checked = state.hideIncomplete;
+    checkbox.addEventListener('change', function () {
+      state.hideIncomplete = checkbox.checked;
+      saveSettings();
+      recomputeAndRenderData();
+    });
+    var checkboxLabel = document.createElement('label');
+    checkboxLabel.setAttribute('for', 'hideIncompleteCheckbox');
+    checkboxLabel.textContent = 'Hide incomplete period';
+    checkboxRow.appendChild(checkbox);
+    checkboxRow.appendChild(checkboxLabel);
+    incompleteGroup.appendChild(checkboxRow);
+    toolbar.appendChild(incompleteGroup);
+    toolbarEls.incompleteGroup = incompleteGroup;
+
+    // Charts per row
+    var perRowGroup = buildToolbarGroup('Charts Per Row');
     var segmented = document.createElement('div');
     segmented.className = 'segmented';
     for (var n = MIN_CHARTS_PER_ROW; n <= MAX_CHARTS_PER_ROW; n++) {
@@ -532,8 +855,9 @@
         segmented.appendChild(btn);
       })(n);
     }
-    control.appendChild(segmented);
-    toolbar.appendChild(control);
+    perRowGroup.appendChild(segmented);
+    toolbar.appendChild(perRowGroup);
+
     return toolbar;
   }
 
@@ -554,12 +878,26 @@
         state.chartsPerRow = savedPerRow;
       }
       var savedOrder = settings.get('order');
-      if (savedOrder) {
-        state.order = JSON.parse(savedOrder);
-      }
+      if (savedOrder) state.order = JSON.parse(savedOrder);
+
+      var savedGranularity = settings.get('granularity');
+      if (savedGranularity) state.granularity = savedGranularity;
+
+      var savedWeekStart = parseInt(settings.get('weekStartDay'), 10);
+      if (savedWeekStart === 0 || savedWeekStart === 1) state.weekStartDay = savedWeekStart;
+
+      var savedHideIncomplete = settings.get('hideIncomplete');
+      if (savedHideIncomplete !== undefined) state.hideIncomplete = savedHideIncomplete === 'true';
+
+      var savedStart = settings.get('startDate');
+      if (savedStart) state.startDate = savedStart;
+
+      var savedEnd = settings.get('endDate');
+      if (savedEnd) state.endDate = savedEnd;
     } catch (e) {
       // no saved settings yet; defaults stand
     }
+    ensureDefaultDateRange();
   }
 
   function saveSettings() {
@@ -567,6 +905,11 @@
       var settings = tableau.extensions.settings;
       settings.set('chartsPerRow', String(state.chartsPerRow));
       settings.set('order', JSON.stringify(state.order));
+      settings.set('granularity', state.granularity);
+      settings.set('weekStartDay', String(state.weekStartDay));
+      settings.set('hideIncomplete', String(state.hideIncomplete));
+      settings.set('startDate', state.startDate);
+      settings.set('endDate', state.endDate);
       settings.saveAsync();
     } catch (e) {
       // ignore persistence failures
@@ -574,38 +917,15 @@
   }
 
   function render(dataTable) {
-    var columns = dataTable.columns;
-    var rows = dataTable.data;
-
-    var picked = pickColumns(columns);
+    var picked = pickColumns(dataTable.columns);
 
     if (picked.timeIndex === null || picked.metricIndexes.length === 0) {
       showMessage('Add a time dimension and at least one numeric metric to the Marks card.');
       return;
     }
 
-    var sortedRows = rows.slice().sort(function (a, b) {
-      return timeSortValue(a[picked.timeIndex]) - timeSortValue(b[picked.timeIndex]);
-    });
-
-    lastTimeLabels = sortedRows.map(function (row) {
-      return row[picked.timeIndex].formattedValue;
-    });
-
-    lastMetrics = picked.metricIndexes.map(function (colIndex) {
-      var values = [];
-      var formatted = [];
-      sortedRows.forEach(function (row) {
-        var cell = row[colIndex];
-        var v = cell && cell.value !== null && cell.value !== undefined ? Number(cell.value) : null;
-        values.push(v === null || isNaN(v) ? null : v);
-        formatted.push(cell ? cell.formattedValue : '');
-      });
-      return { name: columns[colIndex].fieldName, values: values, formatted: formatted };
-    });
-
-    if (!appBuilt) buildApp();
-    renderGrid();
+    parseRawRows(dataTable, picked);
+    recomputeAndRenderData();
   }
 
   function refresh(worksheet) {
