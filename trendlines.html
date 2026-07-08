@@ -38,9 +38,22 @@
     display: flex;
     flex-wrap: wrap;
     align-items: flex-end;
-    justify-content: flex-end;
+    justify-content: space-between;
+    gap: 14px 24px;
+    background: rgba(255, 255, 255, 0.55);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+    border-radius: 14px;
+    padding: 12px 16px;
+    margin-bottom: 18px;
+    box-shadow: 0 4px 16px rgba(28, 37, 68, 0.06);
+    border-bottom: 1px solid rgba(28, 37, 68, 0.08);
+  }
+  .toolbar-left, .toolbar-right {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-end;
     gap: 14px 20px;
-    margin-bottom: 16px;
   }
   .toolbar-group {
     display: flex;
@@ -124,20 +137,32 @@
   }
   .card {
     box-sizing: border-box;
+    position: relative;
     border-radius: var(--radius);
     padding: 14px 14px 10px 14px;
     background: var(--card-bg);
     box-shadow: 0 6px 20px rgba(28, 37, 68, 0.08), 0 1px 3px rgba(28, 37, 68, 0.06);
     cursor: grab;
-    transition: opacity 0.15s ease, outline 0.15s ease, transform 0.15s ease;
-    outline: 2px dashed transparent;
-    outline-offset: 3px;
+    transition: opacity 0.15s ease, transform 0.15s ease;
   }
   .card.dragging {
     opacity: 0.4;
   }
-  .card.drag-over {
-    outline: 2px dashed var(--purple);
+  .card.drop-indicator-left::before,
+  .card.drop-indicator-right::after {
+    content: '';
+    position: absolute;
+    top: 6px;
+    bottom: 6px;
+    width: 3px;
+    border-radius: 2px;
+    background: linear-gradient(180deg, var(--purple), var(--blue));
+  }
+  .card.drop-indicator-left::before {
+    left: -10px;
+  }
+  .card.drop-indicator-right::after {
+    right: -10px;
   }
   .card-title {
     font-size: 13px;
@@ -153,6 +178,7 @@
     height: 110px;
     display: block;
     overflow: visible;
+    cursor: default;
   }
   .axis-row {
     display: flex;
@@ -167,6 +193,31 @@
     color: var(--muted);
     font-size: 13px;
     padding: 20px;
+  }
+  .chart-tooltip {
+    position: fixed;
+    pointer-events: none;
+    background: var(--ink);
+    color: #FFFFFF;
+    font-size: 11px;
+    line-height: 1.5;
+    padding: 6px 9px;
+    border-radius: 8px;
+    box-shadow: 0 4px 12px rgba(28, 37, 68, 0.25);
+    z-index: 1000;
+    opacity: 0;
+    transition: opacity 0.1s ease;
+    white-space: nowrap;
+  }
+  .chart-tooltip.visible {
+    opacity: 1;
+  }
+  .chart-tooltip .tt-date {
+    color: #C7CCE3;
+    font-weight: 500;
+  }
+  .chart-tooltip .tt-metric {
+    font-weight: 600;
   }
 </style>
 </head>
@@ -201,11 +252,12 @@
     { value: 'trailing35', label: 'Trailing 35 Days' }
   ];
   var TRAILING_N = { trailing7: 7, trailing14: 14, trailing21: 21, trailing28: 28, trailing35: 35 };
-  var WEEK_START_RELEVANT = ['weekly', 'trailing7', 'trailing14', 'trailing21', 'trailing28', 'trailing35'];
   var INCOMPLETE_RELEVANT = ['weekly', 'monthly', 'quarterly', 'yearly'];
+  var WEEK_START_PARAMETER_NAME = 'Week Start Day';
 
   var appEl = document.getElementById('app');
   var gridEl = null;
+  var tooltipEl = null;
   var toolbarEls = {};
   var appBuilt = false;
   var dragSrcName = null;
@@ -480,6 +532,11 @@
     return idxs.filter(function (v, i, a) { return a.indexOf(v) === i; });
   }
 
+  function formatValue(v) {
+    if (v === null || v === undefined || isNaN(v)) return 'No data';
+    return v.toLocaleString(undefined, { maximumFractionDigits: 2 });
+  }
+
   // Catmull-Rom -> cubic Bezier, so lines read as soft curves instead of
   // sharp polyline segments (per the reference sparkline screenshot).
   function segmentToLinePath(pts) {
@@ -600,18 +657,28 @@
     svg.appendChild(defs);
 
     geo.segments.forEach(function (pts) {
+      if (pts.length === 1) {
+        // A single-point segment (e.g. one bucket of data) has no line to
+        // draw; show a dot instead so it isn't rendered as an empty chart.
+        var dot = document.createElementNS(svgNs, 'circle');
+        dot.setAttribute('cx', pts[0][0].toFixed(2));
+        dot.setAttribute('cy', pts[0][1].toFixed(2));
+        dot.setAttribute('r', '3.5');
+        dot.setAttribute('fill', BLUE);
+        svg.appendChild(dot);
+        return;
+      }
+
       var linePath = segmentToLinePath(pts);
 
-      if (pts.length > 1) {
-        var areaPath = document.createElementNS(svgNs, 'path');
-        var closedPath = linePath +
-          'L' + pts[pts.length - 1][0].toFixed(2) + ',' + geo.baselineY.toFixed(2) + ' ' +
-          'L' + pts[0][0].toFixed(2) + ',' + geo.baselineY.toFixed(2) + ' Z';
-        areaPath.setAttribute('d', closedPath);
-        areaPath.setAttribute('fill', 'url(#areaGrad-' + gradId + ')');
-        areaPath.setAttribute('stroke', 'none');
-        svg.appendChild(areaPath);
-      }
+      var areaPath = document.createElementNS(svgNs, 'path');
+      var closedPath = linePath +
+        'L' + pts[pts.length - 1][0].toFixed(2) + ',' + geo.baselineY.toFixed(2) + ' ' +
+        'L' + pts[0][0].toFixed(2) + ',' + geo.baselineY.toFixed(2) + ' Z';
+      areaPath.setAttribute('d', closedPath);
+      areaPath.setAttribute('fill', 'url(#areaGrad-' + gradId + ')');
+      areaPath.setAttribute('stroke', 'none');
+      svg.appendChild(areaPath);
 
       var linePathEl = document.createElementNS(svgNs, 'path');
       linePathEl.setAttribute('d', linePath);
@@ -622,6 +689,22 @@
       linePathEl.setAttribute('stroke-linejoin', 'round');
       linePathEl.setAttribute('vector-effect', 'non-scaling-stroke');
       svg.appendChild(linePathEl);
+    });
+
+    svg.addEventListener('dragstart', function (e) {
+      e.preventDefault();
+    });
+    svg.addEventListener('mousemove', function (e) {
+      var rect = svg.getBoundingClientRect();
+      var fraction = (e.clientX - rect.left) / rect.width;
+      var xInViewBox = fraction * width;
+      var n = metric.values.length;
+      var idx = n > 1 ? Math.round(((xInViewBox - padX) / (width - padX * 2)) * (n - 1)) : 0;
+      idx = Math.max(0, Math.min(n - 1, idx));
+      showTooltip(e.clientX, e.clientY, timeLabels[idx], metric.name, metric.values[idx]);
+    });
+    svg.addEventListener('mouseleave', function () {
+      hideTooltip();
     });
 
     card.appendChild(svg);
@@ -646,37 +729,64 @@
     });
     card.addEventListener('dragend', function () {
       card.classList.remove('dragging');
-      Array.prototype.forEach.call(gridEl.querySelectorAll('.card'), function (c) {
-        c.classList.remove('drag-over');
-      });
+      clearDropIndicators();
       dragSrcName = null;
     });
     card.addEventListener('dragover', function (e) {
       e.preventDefault();
       if (e.dataTransfer) e.dataTransfer.dropEffect = 'move';
-      card.classList.add('drag-over');
-    });
-    card.addEventListener('dragleave', function () {
-      card.classList.remove('drag-over');
+      if (!dragSrcName || dragSrcName === metric.name) return;
+      var rect = card.getBoundingClientRect();
+      var side = (e.clientX - rect.left) < rect.width / 2 ? 'left' : 'right';
+      clearDropIndicators();
+      card.classList.add(side === 'left' ? 'drop-indicator-left' : 'drop-indicator-right');
+      card.dataset.dropSide = side;
     });
     card.addEventListener('drop', function (e) {
       e.preventDefault();
-      card.classList.remove('drag-over');
-      var targetName = metric.name;
-      if (dragSrcName && dragSrcName !== targetName) {
-        reorder(dragSrcName, targetName);
+      var side = card.dataset.dropSide;
+      clearDropIndicators();
+      if (dragSrcName && dragSrcName !== metric.name && side) {
+        reorder(dragSrcName, metric.name, side);
       }
     });
 
     return card;
   }
 
-  function reorder(srcName, targetName) {
+  function clearDropIndicators() {
+    if (!gridEl) return;
+    Array.prototype.forEach.call(gridEl.querySelectorAll('.card'), function (c) {
+      c.classList.remove('drop-indicator-left', 'drop-indicator-right');
+      delete c.dataset.dropSide;
+    });
+  }
+
+  function showTooltip(clientX, clientY, dateLabel, metricName, value) {
+    if (!tooltipEl) return;
+    tooltipEl.innerHTML = '<div class="tt-date">' + dateLabel + '</div>' +
+      '<div><span class="tt-metric">' + metricName + ':</span> ' + formatValue(value) + '</div>';
+    tooltipEl.classList.add('visible');
+    var left = clientX + 14;
+    var top = clientY - 14;
+    var maxLeft = window.innerWidth - tooltipEl.offsetWidth - 8;
+    var maxTop = window.innerHeight - tooltipEl.offsetHeight - 8;
+    tooltipEl.style.left = Math.min(left, Math.max(0, maxLeft)) + 'px';
+    tooltipEl.style.top = Math.min(Math.max(0, top), Math.max(0, maxTop)) + 'px';
+  }
+
+  function hideTooltip() {
+    if (tooltipEl) tooltipEl.classList.remove('visible');
+  }
+
+  // Inserts the dragged metric immediately before/after the drop target,
+  // based on which half of the target card the pointer was over.
+  function reorder(srcName, targetName, side) {
     var srcIdx = state.order.indexOf(srcName);
-    var targetIdx = state.order.indexOf(targetName);
-    if (srcIdx === -1 || targetIdx === -1) return;
+    if (srcIdx === -1) return;
     state.order.splice(srcIdx, 1);
-    var insertAt = state.order.indexOf(targetName);
+    var targetIdx = state.order.indexOf(targetName);
+    var insertAt = targetIdx === -1 ? state.order.length : (side === 'left' ? targetIdx : targetIdx + 1);
     state.order.splice(insertAt, 0, srcName);
     saveSettings();
     renderGrid();
@@ -719,9 +829,6 @@
   }
 
   function updateToolbarVisibility() {
-    if (toolbarEls.weekStartGroup) {
-      toolbarEls.weekStartGroup.classList.toggle('hidden', WEEK_START_RELEVANT.indexOf(state.granularity) === -1);
-    }
     if (toolbarEls.incompleteGroup) {
       toolbarEls.incompleteGroup.classList.toggle('hidden', INCOMPLETE_RELEVANT.indexOf(state.granularity) === -1);
     }
@@ -741,6 +848,12 @@
     var toolbar = document.createElement('div');
     toolbar.className = 'toolbar';
 
+    var left = document.createElement('div');
+    left.className = 'toolbar-left';
+
+    var right = document.createElement('div');
+    right.className = 'toolbar-right';
+
     // Granularity
     var granGroup = buildToolbarGroup('Timeframe');
     var granSelect = document.createElement('select');
@@ -759,27 +872,7 @@
       recomputeAndRenderData();
     });
     granGroup.appendChild(granSelect);
-    toolbar.appendChild(granGroup);
-
-    // Week start day
-    var weekGroup = buildToolbarGroup('Week Starts On');
-    var weekSelect = document.createElement('select');
-    weekSelect.className = 'control';
-    [{ value: 0, label: 'Sunday' }, { value: 1, label: 'Monday' }].forEach(function (opt) {
-      var o = document.createElement('option');
-      o.value = String(opt.value);
-      o.textContent = opt.label;
-      if (opt.value === state.weekStartDay) o.selected = true;
-      weekSelect.appendChild(o);
-    });
-    weekSelect.addEventListener('change', function () {
-      state.weekStartDay = parseInt(weekSelect.value, 10);
-      saveSettings();
-      recomputeAndRenderData();
-    });
-    weekGroup.appendChild(weekSelect);
-    toolbar.appendChild(weekGroup);
-    toolbarEls.weekStartGroup = weekGroup;
+    left.appendChild(granGroup);
 
     // Start date
     var startGroup = buildToolbarGroup('Start Date');
@@ -793,7 +886,7 @@
       recomputeAndRenderData();
     });
     startGroup.appendChild(startInput);
-    toolbar.appendChild(startGroup);
+    left.appendChild(startGroup);
     toolbarEls.startInput = startInput;
 
     // End date
@@ -808,7 +901,7 @@
       recomputeAndRenderData();
     });
     endGroup.appendChild(endInput);
-    toolbar.appendChild(endGroup);
+    left.appendChild(endGroup);
     toolbarEls.endInput = endInput;
 
     // Hide incomplete period
@@ -830,7 +923,7 @@
     checkboxRow.appendChild(checkbox);
     checkboxRow.appendChild(checkboxLabel);
     incompleteGroup.appendChild(checkboxRow);
-    toolbar.appendChild(incompleteGroup);
+    left.appendChild(incompleteGroup);
     toolbarEls.incompleteGroup = incompleteGroup;
 
     // Charts per row
@@ -856,7 +949,10 @@
       })(n);
     }
     perRowGroup.appendChild(segmented);
-    toolbar.appendChild(perRowGroup);
+    right.appendChild(perRowGroup);
+
+    toolbar.appendChild(left);
+    toolbar.appendChild(right);
 
     return toolbar;
   }
@@ -867,6 +963,11 @@
     gridEl = document.createElement('div');
     gridEl.className = 'grid';
     appEl.appendChild(gridEl);
+    if (!tooltipEl) {
+      tooltipEl = document.createElement('div');
+      tooltipEl.className = 'chart-tooltip';
+      document.body.appendChild(tooltipEl);
+    }
     appBuilt = true;
   }
 
@@ -883,9 +984,6 @@
       var savedGranularity = settings.get('granularity');
       if (savedGranularity) state.granularity = savedGranularity;
 
-      var savedWeekStart = parseInt(settings.get('weekStartDay'), 10);
-      if (savedWeekStart === 0 || savedWeekStart === 1) state.weekStartDay = savedWeekStart;
-
       var savedHideIncomplete = settings.get('hideIncomplete');
       if (savedHideIncomplete !== undefined) state.hideIncomplete = savedHideIncomplete === 'true';
 
@@ -897,7 +995,6 @@
     } catch (e) {
       // no saved settings yet; defaults stand
     }
-    ensureDefaultDateRange();
   }
 
   function saveSettings() {
@@ -906,7 +1003,6 @@
       settings.set('chartsPerRow', String(state.chartsPerRow));
       settings.set('order', JSON.stringify(state.order));
       settings.set('granularity', state.granularity);
-      settings.set('weekStartDay', String(state.weekStartDay));
       settings.set('hideIncomplete', String(state.hideIncomplete));
       settings.set('startDate', state.startDate);
       settings.set('endDate', state.endDate);
@@ -914,6 +1010,29 @@
     } catch (e) {
       // ignore persistence failures
     }
+  }
+
+  // Week Start Day isn't shown in the extension UI; it's sourced from a
+  // Tableau parameter of the same name (string value "Sunday" or "Monday"),
+  // matching the parameter the user's own DATETRUNC/DATEDIFF calc already
+  // references. Manifest encodings can't bind parameters, so this is done
+  // via findParameterAsync instead of a marks-card slot.
+  function applyWeekStartValue(rawValue) {
+    var v = (rawValue || '').toString().trim().toLowerCase();
+    state.weekStartDay = v === 'monday' ? 1 : 0;
+  }
+
+  function loadWeekStartParameter(worksheet) {
+    return worksheet.findParameterAsync(WEEK_START_PARAMETER_NAME).then(function (param) {
+      if (!param) return;
+      applyWeekStartValue(param.currentValue.value);
+      param.addEventListener(tableau.TableauEventType.ParameterChanged, function () {
+        applyWeekStartValue(param.currentValue.value);
+        recomputeAndRenderData();
+      });
+    }).catch(function () {
+      // Parameter not found in this workbook; default to Sunday.
+    });
   }
 
   function render(dataTable) {
@@ -940,7 +1059,10 @@
     var worksheet = tableau.extensions.worksheetContent.worksheet;
 
     loadSettings();
-    refresh(worksheet);
+    loadWeekStartParameter(worksheet).then(function () {
+      ensureDefaultDateRange();
+      refresh(worksheet);
+    });
 
     worksheet.addEventListener(tableau.TableauEventType.SummaryDataChanged, function () {
       refresh(worksheet);
