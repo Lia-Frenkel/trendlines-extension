@@ -103,6 +103,23 @@
     background-image: none;
     padding: 7px 10px;
   }
+  .date-field {
+    position: relative;
+    display: inline-block;
+  }
+  .date-field input[type="date"] {
+    color: transparent;
+  }
+  .date-field .date-display {
+    position: absolute;
+    left: 10px;
+    top: 50%;
+    transform: translateY(-50%);
+    font-size: 13px;
+    color: var(--ink);
+    pointer-events: none;
+    white-space: nowrap;
+  }
   .checkbox-row {
     display: flex;
     align-items: center;
@@ -247,6 +264,19 @@
     font-size: 13px;
     padding: 20px;
   }
+  .hover-dot {
+    position: fixed;
+    display: none;
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    border: 1.5px solid #FFFFFF;
+    box-shadow: 0 1px 3px rgba(31, 33, 82, 0.3);
+    pointer-events: none;
+    transform: translate(-50%, -50%);
+    z-index: 999;
+    box-sizing: border-box;
+  }
   .chart-tooltip {
     position: fixed;
     pointer-events: none;
@@ -325,6 +355,7 @@
   var gridEl = null;
   var legendEl = null;
   var tooltipEl = null;
+  var hoverDotEl = null;
   var toolbarEls = {};
   var appBuilt = false;
   var dragSrcName = null;
@@ -799,20 +830,18 @@
     svg.appendChild(label);
   }
 
-  function createHoverDot(svgNs) {
-    var dot = document.createElementNS(svgNs, 'circle');
-    dot.setAttribute('r', '5');
-    dot.setAttribute('stroke', '#FFFFFF');
-    dot.setAttribute('stroke-width', '2');
-    dot.style.display = 'none';
-    dot.style.pointerEvents = 'none';
-    return dot;
-  }
-
-  function positionHoverDot(dot, x, y, color) {
-    dot.setAttribute('cx', x.toFixed(2));
-    dot.setAttribute('cy', y.toFixed(2));
-    dot.setAttribute('fill', color);
+  // The chart SVG stretches non-uniformly (preserveAspectRatio="none") to
+  // fill each card, so an in-SVG <circle> renders as an ellipse. A single
+  // shared, fixed-size HTML overlay (only one card can be hovered at a
+  // time) keeps the hover marker perfectly round and avoids leaking a new
+  // DOM node into <body> on every re-render.
+  function positionHoverDot(dot, svg, xInViewBox, yInViewBox, color) {
+    var rect = svg.getBoundingClientRect();
+    var screenX = rect.left + (xInViewBox / CHART_WIDTH) * rect.width;
+    var screenY = rect.top + (yInViewBox / CHART_HEIGHT) * rect.height;
+    dot.style.left = screenX.toFixed(1) + 'px';
+    dot.style.top = screenY.toFixed(1) + 'px';
+    dot.style.background = color;
     dot.style.display = 'block';
   }
 
@@ -895,9 +924,6 @@
       });
     });
 
-    var hoverDot = createHoverDot(svgNs);
-    svg.appendChild(hoverDot);
-
     svg.addEventListener('mousemove', function (e) {
       var rect = svg.getBoundingClientRect();
       var xInViewBox = ((e.clientX - rect.left) / rect.width) * width;
@@ -916,14 +942,14 @@
       var chosen = metric.series[bestSi];
       var ptX = xForIndex(idx, n, width, padX);
       var dotColor = isSplit ? chosen.color : VIOLET;
-      positionHoverDot(hoverDot, ptX, bestY, dotColor);
+      positionHoverDot(hoverDotEl, svg, ptX, bestY, dotColor);
 
       var label = isSplit ? (chosen.label + ' — ' + metric.name) : metric.name;
       showTooltip(e.clientX, e.clientY, timeLabels[idx], label, chosen.values[idx], metric.format);
     });
     svg.addEventListener('mouseleave', function () {
       hideTooltip();
-      hideHoverDot(hoverDot);
+      hideHoverDot(hoverDotEl);
     });
   }
 
@@ -965,8 +991,6 @@
     var actualGroupWidth = barWidth * S + barGap * (S - 1);
     var baselineY = yForValue(0, scale, height, padTop, padBottom);
 
-    var hoverDot = createHoverDot(svgNs);
-
     for (var j = 0; j < n; j++) {
       var slotStart = padX + j * slotWidth + (slotWidth - actualGroupWidth) / 2;
       metric.series.forEach(function (s, si) {
@@ -987,8 +1011,6 @@
       });
     }
 
-    svg.appendChild(hoverDot);
-
     svg.addEventListener('mousemove', function (e) {
       var rect = svg.getBoundingClientRect();
       var xInViewBox = ((e.clientX - rect.left) / rect.width) * width;
@@ -1003,14 +1025,14 @@
       var barY = yForValue(v, scale, height, padTop, padBottom);
       var barCenterX = groupStart + si * (barWidth + barGap) + barWidth / 2;
       var dotColor = isSplit ? chosen.color : VIOLET;
-      positionHoverDot(hoverDot, barCenterX, Math.min(barY, baselineY), dotColor);
+      positionHoverDot(hoverDotEl, svg, barCenterX, Math.min(barY, baselineY), dotColor);
 
       var label = isSplit ? (chosen.label + ' — ' + metric.name) : metric.name;
       showTooltip(e.clientX, e.clientY, timeLabels[idx], label, v, metric.format);
     });
     svg.addEventListener('mouseleave', function () {
       hideTooltip();
-      hideHoverDot(hoverDot);
+      hideHoverDot(hoverDotEl);
     });
   }
 
@@ -1227,6 +1249,39 @@
     return group;
   }
 
+  // The native date input's own displayed text is locale-controlled by the
+  // browser (can't be restyled), so its text is made transparent and a
+  // formatted label (matching the chart's axis date format) is overlaid on
+  // top with pointer-events disabled — clicks pass through to the real
+  // input underneath, which still opens the native calendar picker.
+  function buildDateField(initialValue, onChange) {
+    var el = document.createElement('div');
+    el.className = 'date-field';
+
+    var input = document.createElement('input');
+    input.type = 'date';
+    input.className = 'control';
+    input.value = initialValue;
+
+    var display = document.createElement('span');
+    display.className = 'date-display';
+    display.textContent = formatDateDisplayValue(initialValue);
+
+    input.addEventListener('change', function () {
+      display.textContent = formatDateDisplayValue(input.value);
+      onChange(input.value);
+    });
+
+    el.appendChild(input);
+    el.appendChild(display);
+    return { el: el, input: input };
+  }
+
+  function formatDateDisplayValue(isoStr) {
+    var d = dateInputToUTC(isoStr);
+    return d ? formatDaily(d) : '';
+  }
+
   function buildSegmented(options, currentValue, onChange) {
     var segmented = document.createElement('div');
     segmented.className = 'segmented';
@@ -1300,34 +1355,26 @@
     }
 
     // Start date
-    var startGroup = buildToolbarGroup('Start Date');
-    var startInput = document.createElement('input');
-    startInput.type = 'date';
-    startInput.className = 'control';
-    startInput.value = state.startDate;
-    startInput.addEventListener('change', function () {
-      state.startDate = startInput.value;
+    var startField = buildDateField(state.startDate, function (value) {
+      state.startDate = value;
       saveSettings();
       recomputeAndRenderData();
     });
-    startGroup.appendChild(startInput);
+    var startGroup = buildToolbarGroup('Start Date');
+    startGroup.appendChild(startField.el);
     left.appendChild(startGroup);
-    toolbarEls.startInput = startInput;
+    toolbarEls.startInput = startField.input;
 
     // End date
-    var endGroup = buildToolbarGroup('End Date');
-    var endInput = document.createElement('input');
-    endInput.type = 'date';
-    endInput.className = 'control';
-    endInput.value = state.endDate;
-    endInput.addEventListener('change', function () {
-      state.endDate = endInput.value;
+    var endField = buildDateField(state.endDate, function (value) {
+      state.endDate = value;
       saveSettings();
       recomputeAndRenderData();
     });
-    endGroup.appendChild(endInput);
+    var endGroup = buildToolbarGroup('End Date');
+    endGroup.appendChild(endField.el);
     left.appendChild(endGroup);
-    toolbarEls.endInput = endInput;
+    toolbarEls.endInput = endField.input;
 
     // Hide incomplete period
     var incompleteGroup = buildToolbarGroup(' ');
@@ -1398,6 +1445,11 @@
       tooltipEl = document.createElement('div');
       tooltipEl.className = 'chart-tooltip';
       document.body.appendChild(tooltipEl);
+    }
+    if (!hoverDotEl) {
+      hoverDotEl = document.createElement('div');
+      hoverDotEl.className = 'hover-dot';
+      document.body.appendChild(hoverDotEl);
     }
     appBuilt = true;
   }
@@ -1498,7 +1550,13 @@
       splitsParameter = param;
       splitsParamOptions = extractParameterOptions(param);
       param.addEventListener(tableau.TableauEventType.ParameterChanged, function () {
-        syncSplitsSelectValue(toolbarEls.splitsSelect);
+        // Re-fetch rather than trusting the cached Parameter reference's
+        // currentValue, which can lag behind the event that announced it.
+        worksheet.findParameterAsync(SPLITS_PARAMETER_NAME).then(function (fresh) {
+          if (!fresh) return;
+          splitsParameter = fresh;
+          syncSplitsSelectValue(toolbarEls.splitsSelect);
+        });
       });
     }).catch(function () {
       // Parameter not found in this workbook; dropdown stays hidden.
