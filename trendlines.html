@@ -181,14 +181,38 @@
     cursor: default;
   }
   .data-label {
-    font-size: 8px;
+    font-size: 7px;
     font-weight: 600;
-    fill: var(--ink);
+    fill: #5B3FC9;
     pointer-events: none;
     display: none;
   }
   .grid.labels-visible .data-label {
     display: block;
+  }
+  .legend {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    gap: 6px 14px;
+    margin-bottom: 14px;
+  }
+  .legend.hidden {
+    display: none;
+  }
+  .legend-item {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 11px;
+    color: var(--ink);
+  }
+  .legend-swatch {
+    width: 10px;
+    height: 10px;
+    border-radius: 3px;
+    display: inline-block;
+    flex: none;
   }
   .axis-row {
     display: flex;
@@ -246,6 +270,13 @@
   var DEFAULT_CHARTS_PER_ROW = 4;
   var PURPLE = '#7B61FF';
   var BLUE = '#4C82FB';
+  var LABEL_COLOR = '#5B3FC9';
+  var OTHER_COLOR = '#8A8FA6';
+  var MAX_SPLIT_COLORS = 8;
+  var DEFAULT_SERIES_KEY = '__default__';
+  // Validated categorical palette (fixed order — see dataviz skill palette.md):
+  // blue, aqua, yellow, green, violet, red, magenta, orange.
+  var CATEGORICAL_PALETTE = ['#2a78d6', '#1baf7a', '#eda100', '#008300', '#4a3aa7', '#e34948', '#e87ba4', '#eb6834'];
   var MONTH_ABBR = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
   var DAY_MS = 86400000;
 
@@ -273,6 +304,7 @@
 
   var appEl = document.getElementById('app');
   var gridEl = null;
+  var legendEl = null;
   var tooltipEl = null;
   var toolbarEls = {};
   var appBuilt = false;
@@ -285,17 +317,21 @@
     weekStartDay: 0,
     hideIncomplete: false,
     startDate: null,
-    endDate: null
+    endDate: null,
+    chartType: 'line'
   };
 
   var rawRows = [];
   var metricColumns = [];
+  var splitPaletteInfo = { map: null, legend: [] };
   var lastMetrics = [];
   var lastTimeLabels = [];
+  var lastSplitLegend = null;
 
   function showMessage(text) {
     appBuilt = false;
     gridEl = null;
+    legendEl = null;
     appEl.innerHTML = '<div class="message"></div>';
     appEl.firstChild.textContent = text;
   }
@@ -338,8 +374,10 @@
     };
   }
 
+  // Full-precision format for tooltips — matches the workbook's own number
+  // formatting. Null/missing values always display as 0 per the "no gaps" rule.
   function formatMetricValue(fmt, value) {
-    if (value === null || value === undefined || isNaN(value)) return 'No data';
+    if (value === null || value === undefined || isNaN(value)) value = 0;
     if (!fmt) return value.toLocaleString(undefined, { maximumFractionDigits: 2 });
     var scaled = value * fmt.multiplier;
     var numStr = fmt.thousands
@@ -348,13 +386,30 @@
     return fmt.prefix + numStr + fmt.suffix;
   }
 
-  // Picks the time/dimension column and the metric (measure) columns from
-  // whatever fields happen to be on the worksheet's Marks card, so the
-  // extension works without requiring the user to configure anything.
+  // Compact format for on-chart data labels: no decimals, large numbers
+  // abbreviated to K/M so labels stay short next to a data point or bar.
+  function formatCompactLabel(fmt, value) {
+    if (value === null || value === undefined || isNaN(value)) value = 0;
+    var scaled = fmt ? value * fmt.multiplier : value;
+    var prefix = fmt ? fmt.prefix : '';
+    var suffix = fmt ? fmt.suffix : '';
+    var abs = Math.abs(scaled);
+    var divisor = 1;
+    var letter = '';
+    if (abs >= 1e6) { divisor = 1e6; letter = 'M'; }
+    else if (abs >= 1e3) { divisor = 1e3; letter = 'K'; }
+    var rounded = Math.round(scaled / divisor);
+    return prefix + rounded.toLocaleString() + letter + suffix;
+  }
+
+  // Picks the time dimension, metric (measure) columns, and an optional
+  // "Splits" breakdown dimension from whatever fields happen to be on the
+  // worksheet's Marks card, so the extension works without requiring the
+  // user to configure anything beyond dropping fields onto the sheet.
   function pickColumns(columns) {
     var dateCol = null;
-    var nonNumericCol = null;
     var numericCols = [];
+    var otherCols = [];
 
     for (var i = 0; i < columns.length; i++) {
       var col = columns[i];
@@ -362,23 +417,15 @@
         if (dateCol === null) dateCol = col.index;
       } else if (isNumericType(col.dataType)) {
         numericCols.push(col.index);
-      } else if (nonNumericCol === null) {
-        nonNumericCol = col.index;
+      } else {
+        otherCols.push(col.index);
       }
     }
 
-    var timeIndex = dateCol !== null ? dateCol : nonNumericCol;
+    var timeIndex = dateCol !== null ? dateCol : (otherCols.length ? otherCols.shift() : null);
+    var splitIndex = otherCols.length > 0 ? otherCols[0] : null;
 
-    if (timeIndex === null && columns.length > numericCols.length) {
-      for (var j = 0; j < columns.length; j++) {
-        if (numericCols.indexOf(columns[j].index) === -1) {
-          timeIndex = columns[j].index;
-          break;
-        }
-      }
-    }
-
-    return { timeIndex: timeIndex, metricIndexes: numericCols };
+    return { timeIndex: timeIndex, metricIndexes: numericCols, splitIndex: splitIndex };
   }
 
   function cellToUTCDate(cell) {
@@ -492,6 +539,37 @@
     }
   }
 
+  // Assigns each distinct Splits value a fixed, validated categorical color.
+  // The most frequent values (by row count) keep individual identity; beyond
+  // the 8-color palette, the long tail folds into a neutral-gray "Other"
+  // bucket rather than generating more hues (per the dataviz palette rules).
+  function buildSplitPalette(rows) {
+    var counts = {};
+    rows.forEach(function (r) {
+      if (r.splitValue !== null) counts[r.splitValue] = (counts[r.splitValue] || 0) + 1;
+    });
+    var values = Object.keys(counts);
+    if (values.length === 0) return { map: null, legend: [] };
+
+    values.sort(function (a, b) { return counts[b] - counts[a]; });
+    var top = values.slice(0, MAX_SPLIT_COLORS).sort();
+    var overflow = values.slice(MAX_SPLIT_COLORS);
+
+    var map = {};
+    var legend = [];
+    top.forEach(function (v, i) {
+      var entry = { key: v, label: v, color: CATEGORICAL_PALETTE[i] };
+      map[v] = entry;
+      legend.push(entry);
+    });
+    if (overflow.length > 0) {
+      var otherEntry = { key: '__other__', label: 'Other', color: OTHER_COLOR };
+      overflow.forEach(function (v) { map[v] = otherEntry; });
+      legend.push(otherEntry);
+    }
+    return { map: map, legend: legend };
+  }
+
   function parseRawRows(dataTable, picked) {
     var rows = dataTable.data;
     var columns = dataTable.columns;
@@ -506,6 +584,14 @@
     rows.forEach(function (row) {
       var dateUTC = cellToUTCDate(row[picked.timeIndex]);
       if (!dateUTC) return;
+
+      var splitValue = null;
+      if (picked.splitIndex !== null) {
+        var splitCell = row[picked.splitIndex];
+        var fv = splitCell ? splitCell.formattedValue : null;
+        splitValue = fv !== null && fv !== undefined && fv !== '' ? fv : '(blank)';
+      }
+
       var values = metricColumns.map(function (mc, i) {
         var cell = row[mc.index];
         var v = cell && cell.value !== null && cell.value !== undefined ? Number(cell.value) : null;
@@ -514,13 +600,15 @@
         }
         return v === null || isNaN(v) ? null : v;
       });
-      rawRows.push({ dateUTC: dateUTC, values: values });
+      rawRows.push({ dateUTC: dateUTC, splitValue: splitValue, values: values });
     });
 
     metricColumns.forEach(function (mc, i) {
       var sample = formatSamples[i];
       mc.format = sample ? detectFormat(sample.value, sample.formattedValue) : null;
     });
+
+    splitPaletteInfo = buildSplitPalette(rawRows);
   }
 
   function ensureDefaultDateRange() {
@@ -542,18 +630,29 @@
       return true;
     });
 
+    // A splits column with only one distinct value in view isn't worth
+    // splitting visually — fall back to the single default-styled series.
+    var useSplits = !!(splitPaletteInfo.map && splitPaletteInfo.legend.length >= 2);
+    var legendEntries = useSplits ? splitPaletteInfo.legend : null;
+    var seriesKeys = useSplits ? legendEntries.map(function (e) { return e.key; }) : [DEFAULT_SERIES_KEY];
+
     var buckets = {};
     filtered.forEach(function (r) {
       var b = computeBucket(r.dateUTC, state.granularity, state.weekStartDay, today);
       var key = String(b.sortValue);
       if (!buckets[key]) {
         var incomplete = INCOMPLETE_RELEVANT.indexOf(state.granularity) !== -1 && b.periodEnd && b.periodEnd.getTime() >= today.getTime();
-        buckets[key] = { sortValue: b.sortValue, label: b.label, incomplete: incomplete, sums: metricColumns.map(function () { return 0; }), counts: metricColumns.map(function () { return 0; }) };
+        buckets[key] = { sortValue: b.sortValue, label: b.label, incomplete: incomplete, series: {} };
+        seriesKeys.forEach(function (sk) {
+          buckets[key].series[sk] = { sums: metricColumns.map(function () { return 0; }), counts: metricColumns.map(function () { return 0; }) };
+        });
       }
+      var seriesKey = useSplits ? splitPaletteInfo.map[r.splitValue].key : DEFAULT_SERIES_KEY;
+      var target = buckets[key].series[seriesKey];
       r.values.forEach(function (v, i) {
         if (v !== null) {
-          buckets[key].sums[i] += v;
-          buckets[key].counts[i] += 1;
+          target.sums[i] += v;
+          target.counts[i] += 1;
         }
       });
     });
@@ -567,16 +666,29 @@
     bucketList.sort(function (a, b) { return a.sortValue - b.sortValue; });
 
     lastTimeLabels = bucketList.map(function (b) { return b.label; });
+    lastSplitLegend = legendEntries;
+
     lastMetrics = metricColumns.map(function (mc, i) {
-      return {
-        name: mc.name,
-        format: mc.format,
-        values: bucketList.map(function (b) { return b.counts[i] > 0 ? b.sums[i] : null; })
-      };
+      var series = seriesKeys.map(function (sk, si) {
+        var entry = legendEntries ? legendEntries[si] : null;
+        return {
+          key: sk,
+          label: entry ? entry.label : null,
+          color: entry ? entry.color : null,
+          // Null-as-zero: a bucket with no contributing rows for this series
+          // displays as 0 rather than leaving a gap.
+          values: bucketList.map(function (b) {
+            var s = b.series[sk];
+            return s.counts[i] > 0 ? s.sums[i] : 0;
+          })
+        };
+      });
+      return { name: mc.name, format: mc.format, series: series };
     });
 
     if (!appBuilt) buildApp();
     updateToolbarVisibility();
+    updateLegend();
     renderGrid();
   }
 
@@ -618,7 +730,7 @@
     return path;
   }
 
-  function buildGeometry(values, width, height, padTop, padBottom, padX) {
+  function computeScale(values) {
     var nums = values.filter(function (v) { return v !== null && !isNaN(v); });
     var min = nums.length ? Math.min.apply(null, nums) : 0;
     var max = nums.length ? Math.max.apply(null, nums) : 1;
@@ -626,11 +738,20 @@
       min -= 1;
       max += 1;
     }
+    return { min: min, max: max };
+  }
 
-    var innerW = width - padX * 2;
+  function xForIndex(idx, n, width, padX) {
+    return n === 1 ? padX : padX + (idx / (n - 1)) * (width - padX * 2);
+  }
+
+  function yForValue(v, scale, height, padTop, padBottom) {
     var innerH = height - padTop - padBottom;
-    var n = values.length;
+    return padTop + innerH - ((v - scale.min) / (scale.max - scale.min)) * innerH;
+  }
 
+  function buildGeometry(values, scale, width, height, padTop, padBottom, padX) {
+    var n = values.length;
     var segments = [];
     var current = [];
     for (var i = 0; i < n; i++) {
@@ -640,24 +761,233 @@
         current = [];
         continue;
       }
-      var x = n === 1 ? padX : padX + (i / (n - 1)) * innerW;
-      var y = padTop + innerH - ((v - min) / (max - min)) * innerH;
-      current.push([x, y, v]);
+      current.push([xForIndex(i, n, width, padX), yForValue(v, scale, height, padTop, padBottom), v]);
     }
     if (current.length) segments.push(current);
-
     return { segments: segments, baselineY: height - padBottom };
   }
 
+  function addDataLabel(svg, x, y, value, fmt) {
+    var svgNs = 'http://www.w3.org/2000/svg';
+    var label = document.createElementNS(svgNs, 'text');
+    label.setAttribute('class', 'data-label');
+    label.setAttribute('x', x.toFixed(2));
+    label.setAttribute('y', (y - 6).toFixed(2));
+    label.setAttribute('text-anchor', 'middle');
+    label.textContent = formatCompactLabel(fmt, value);
+    svg.appendChild(label);
+  }
+
+  function createHoverDot(svgNs) {
+    var dot = document.createElementNS(svgNs, 'circle');
+    dot.setAttribute('r', '5');
+    dot.setAttribute('stroke', '#FFFFFF');
+    dot.setAttribute('stroke-width', '2');
+    dot.style.display = 'none';
+    dot.style.pointerEvents = 'none';
+    return dot;
+  }
+
+  function positionHoverDot(dot, x, y, color) {
+    dot.setAttribute('cx', x.toFixed(2));
+    dot.setAttribute('cy', y.toFixed(2));
+    dot.setAttribute('fill', color);
+    dot.style.display = 'block';
+  }
+
+  function hideHoverDot(dot) {
+    dot.style.display = 'none';
+  }
+
+  function renderLines(svg, metric, timeLabels, gradId, isSplit) {
+    var svgNs = 'http://www.w3.org/2000/svg';
+    var width = CHART_WIDTH, height = CHART_HEIGHT, padTop = CHART_PAD_TOP, padBottom = CHART_PAD_BOTTOM, padX = CHART_PAD_X;
+
+    var allValues = [];
+    metric.series.forEach(function (s) { allValues = allValues.concat(s.values); });
+    var scale = computeScale(allValues);
+
+    var defs = document.createElementNS(svgNs, 'defs');
+    if (!isSplit) {
+      var areaGrad = document.createElementNS(svgNs, 'linearGradient');
+      areaGrad.setAttribute('id', 'areaGrad-' + gradId);
+      areaGrad.setAttribute('x1', '0'); areaGrad.setAttribute('y1', '0');
+      areaGrad.setAttribute('x2', '0'); areaGrad.setAttribute('y2', '1');
+      var stop1 = document.createElementNS(svgNs, 'stop');
+      stop1.setAttribute('offset', '0%'); stop1.setAttribute('stop-color', PURPLE); stop1.setAttribute('stop-opacity', '0.28');
+      var stop2 = document.createElementNS(svgNs, 'stop');
+      stop2.setAttribute('offset', '100%'); stop2.setAttribute('stop-color', BLUE); stop2.setAttribute('stop-opacity', '0');
+      areaGrad.appendChild(stop1); areaGrad.appendChild(stop2);
+      defs.appendChild(areaGrad);
+
+      var lineGrad = document.createElementNS(svgNs, 'linearGradient');
+      lineGrad.setAttribute('id', 'lineGrad-' + gradId);
+      lineGrad.setAttribute('x1', '0'); lineGrad.setAttribute('y1', '0');
+      lineGrad.setAttribute('x2', '1'); lineGrad.setAttribute('y2', '0');
+      var lstop1 = document.createElementNS(svgNs, 'stop');
+      lstop1.setAttribute('offset', '0%'); lstop1.setAttribute('stop-color', PURPLE);
+      var lstop2 = document.createElementNS(svgNs, 'stop');
+      lstop2.setAttribute('offset', '100%'); lstop2.setAttribute('stop-color', BLUE);
+      lineGrad.appendChild(lstop1); lineGrad.appendChild(lstop2);
+      defs.appendChild(lineGrad);
+    }
+    svg.appendChild(defs);
+
+    var seriesGeo = metric.series.map(function (s) {
+      return buildGeometry(s.values, scale, width, height, padTop, padBottom, padX);
+    });
+
+    metric.series.forEach(function (seriesObj, si) {
+      var geo = seriesGeo[si];
+      var strokeColor = isSplit ? seriesObj.color : ('url(#lineGrad-' + gradId + ')');
+
+      geo.segments.forEach(function (pts) {
+        if (pts.length === 1) {
+          var dot = document.createElementNS(svgNs, 'circle');
+          dot.setAttribute('cx', pts[0][0].toFixed(2));
+          dot.setAttribute('cy', pts[0][1].toFixed(2));
+          dot.setAttribute('r', '3.5');
+          dot.setAttribute('fill', isSplit ? seriesObj.color : BLUE);
+          svg.appendChild(dot);
+          if (!isSplit) addDataLabel(svg, pts[0][0], pts[0][1], pts[0][2], metric.format);
+          return;
+        }
+
+        var linePath = segmentToLinePath(pts);
+
+        if (!isSplit) {
+          var areaPath = document.createElementNS(svgNs, 'path');
+          var closedPath = linePath +
+            'L' + pts[pts.length - 1][0].toFixed(2) + ',' + geo.baselineY.toFixed(2) + ' ' +
+            'L' + pts[0][0].toFixed(2) + ',' + geo.baselineY.toFixed(2) + ' Z';
+          areaPath.setAttribute('d', closedPath);
+          areaPath.setAttribute('fill', 'url(#areaGrad-' + gradId + ')');
+          areaPath.setAttribute('stroke', 'none');
+          svg.appendChild(areaPath);
+        }
+
+        var linePathEl = document.createElementNS(svgNs, 'path');
+        linePathEl.setAttribute('d', linePath);
+        linePathEl.setAttribute('fill', 'none');
+        linePathEl.setAttribute('stroke', strokeColor);
+        linePathEl.setAttribute('stroke-width', '2');
+        linePathEl.setAttribute('stroke-linecap', 'round');
+        linePathEl.setAttribute('stroke-linejoin', 'round');
+        linePathEl.setAttribute('vector-effect', 'non-scaling-stroke');
+        svg.appendChild(linePathEl);
+
+        if (!isSplit) {
+          pts.forEach(function (pt) { addDataLabel(svg, pt[0], pt[1], pt[2], metric.format); });
+        }
+      });
+    });
+
+    var hoverDot = createHoverDot(svgNs);
+    svg.appendChild(hoverDot);
+
+    svg.addEventListener('mousemove', function (e) {
+      var rect = svg.getBoundingClientRect();
+      var xInViewBox = ((e.clientX - rect.left) / rect.width) * width;
+      var yInViewBox = ((e.clientY - rect.top) / rect.height) * height;
+      var n = timeLabels.length;
+      var idx = n > 1 ? Math.round(((xInViewBox - padX) / (width - padX * 2)) * (n - 1)) : 0;
+      idx = Math.max(0, Math.min(n - 1, idx));
+
+      var bestSi = 0, bestDist = Infinity, bestY = 0;
+      metric.series.forEach(function (s, si) {
+        var y = yForValue(s.values[idx], scale, height, padTop, padBottom);
+        var dist = Math.abs(y - yInViewBox);
+        if (dist < bestDist) { bestDist = dist; bestSi = si; bestY = y; }
+      });
+
+      var chosen = metric.series[bestSi];
+      var ptX = xForIndex(idx, n, width, padX);
+      var dotColor = isSplit ? chosen.color : BLUE;
+      positionHoverDot(hoverDot, ptX, bestY, dotColor);
+
+      var label = isSplit ? (chosen.label + ' — ' + metric.name) : metric.name;
+      showTooltip(e.clientX, e.clientY, timeLabels[idx], label, chosen.values[idx], metric.format);
+    });
+    svg.addEventListener('mouseleave', function () {
+      hideTooltip();
+      hideHoverDot(hoverDot);
+    });
+  }
+
+  function renderBars(svg, metric, timeLabels, isSplit) {
+    var svgNs = 'http://www.w3.org/2000/svg';
+    var width = CHART_WIDTH, height = CHART_HEIGHT, padTop = CHART_PAD_TOP, padBottom = CHART_PAD_BOTTOM, padX = CHART_PAD_X;
+    var n = timeLabels.length;
+    var S = metric.series.length;
+
+    var allValues = [];
+    metric.series.forEach(function (s) { allValues = allValues.concat(s.values); });
+    var scale = computeScale(allValues);
+    scale.min = Math.min(0, scale.min);
+
+    var innerW = width - padX * 2;
+    var slotWidth = n > 0 ? innerW / n : innerW;
+    var groupWidth = slotWidth * 0.7;
+    var barGap = S > 1 ? 2 : 0;
+    var rawBarWidth = (groupWidth - barGap * (S - 1)) / S;
+    var barWidth = Math.max(2, Math.min(20, rawBarWidth));
+    var actualGroupWidth = barWidth * S + barGap * (S - 1);
+    var baselineY = yForValue(0, scale, height, padTop, padBottom);
+
+    var hoverDot = createHoverDot(svgNs);
+
+    for (var j = 0; j < n; j++) {
+      var slotStart = padX + j * slotWidth + (slotWidth - actualGroupWidth) / 2;
+      metric.series.forEach(function (s, si) {
+        var v = s.values[j];
+        var barX = slotStart + si * (barWidth + barGap);
+        var barY = yForValue(v, scale, height, padTop, padBottom);
+        var top = Math.min(barY, baselineY);
+        var barH = Math.abs(baselineY - barY);
+
+        var rect = document.createElementNS(svgNs, 'rect');
+        rect.setAttribute('x', barX.toFixed(2));
+        rect.setAttribute('y', top.toFixed(2));
+        rect.setAttribute('width', barWidth.toFixed(2));
+        rect.setAttribute('height', barH.toFixed(2));
+        rect.setAttribute('rx', '1.5');
+        rect.setAttribute('fill', isSplit ? s.color : BLUE);
+        svg.appendChild(rect);
+
+        if (!isSplit) {
+          addDataLabel(svg, barX + barWidth / 2, top, v, metric.format);
+        }
+      });
+    }
+
+    svg.appendChild(hoverDot);
+
+    svg.addEventListener('mousemove', function (e) {
+      var rect = svg.getBoundingClientRect();
+      var xInViewBox = ((e.clientX - rect.left) / rect.width) * width;
+      var idx = Math.max(0, Math.min(n - 1, Math.floor((xInViewBox - padX) / slotWidth)));
+
+      var groupStart = padX + idx * slotWidth + (slotWidth - actualGroupWidth) / 2;
+      var relX = xInViewBox - groupStart;
+      var si = Math.max(0, Math.min(S - 1, Math.floor(relX / (barWidth + barGap))));
+
+      var chosen = metric.series[si];
+      var v = chosen.values[idx];
+      var barY = yForValue(v, scale, height, padTop, padBottom);
+      var barCenterX = groupStart + si * (barWidth + barGap) + barWidth / 2;
+      var dotColor = isSplit ? chosen.color : BLUE;
+      positionHoverDot(hoverDot, barCenterX, Math.min(barY, baselineY), dotColor);
+
+      var label = isSplit ? (chosen.label + ' — ' + metric.name) : metric.name;
+      showTooltip(e.clientX, e.clientY, timeLabels[idx], label, v, metric.format);
+    });
+    svg.addEventListener('mouseleave', function () {
+      hideTooltip();
+      hideHoverDot(hoverDot);
+    });
+  }
+
   function renderCard(metric, timeLabels, gradId) {
-    var width = CHART_WIDTH;
-    var height = CHART_HEIGHT;
-    var padTop = CHART_PAD_TOP;
-    var padBottom = CHART_PAD_BOTTOM;
-    var padX = CHART_PAD_X;
-
-    var geo = buildGeometry(metric.values, width, height, padTop, padBottom, padX);
-
     var card = document.createElement('div');
     card.className = 'card';
     card.draggable = true;
@@ -671,111 +1001,21 @@
 
     var svgNs = 'http://www.w3.org/2000/svg';
     var svg = document.createElementNS(svgNs, 'svg');
-    svg.setAttribute('viewBox', '0 0 ' + width + ' ' + height);
+    svg.setAttribute('viewBox', '0 0 ' + CHART_WIDTH + ' ' + CHART_HEIGHT);
     svg.setAttribute('preserveAspectRatio', 'none');
     svg.classList.add('card-chart');
 
-    var defs = document.createElementNS(svgNs, 'defs');
-
-    var areaGrad = document.createElementNS(svgNs, 'linearGradient');
-    areaGrad.setAttribute('id', 'areaGrad-' + gradId);
-    areaGrad.setAttribute('x1', '0');
-    areaGrad.setAttribute('y1', '0');
-    areaGrad.setAttribute('x2', '0');
-    areaGrad.setAttribute('y2', '1');
-    var stop1 = document.createElementNS(svgNs, 'stop');
-    stop1.setAttribute('offset', '0%');
-    stop1.setAttribute('stop-color', PURPLE);
-    stop1.setAttribute('stop-opacity', '0.28');
-    var stop2 = document.createElementNS(svgNs, 'stop');
-    stop2.setAttribute('offset', '100%');
-    stop2.setAttribute('stop-color', BLUE);
-    stop2.setAttribute('stop-opacity', '0');
-    areaGrad.appendChild(stop1);
-    areaGrad.appendChild(stop2);
-    defs.appendChild(areaGrad);
-
-    var lineGrad = document.createElementNS(svgNs, 'linearGradient');
-    lineGrad.setAttribute('id', 'lineGrad-' + gradId);
-    lineGrad.setAttribute('x1', '0');
-    lineGrad.setAttribute('y1', '0');
-    lineGrad.setAttribute('x2', '1');
-    lineGrad.setAttribute('y2', '0');
-    var lstop1 = document.createElementNS(svgNs, 'stop');
-    lstop1.setAttribute('offset', '0%');
-    lstop1.setAttribute('stop-color', PURPLE);
-    var lstop2 = document.createElementNS(svgNs, 'stop');
-    lstop2.setAttribute('offset', '100%');
-    lstop2.setAttribute('stop-color', BLUE);
-    lineGrad.appendChild(lstop1);
-    lineGrad.appendChild(lstop2);
-    defs.appendChild(lineGrad);
-
-    svg.appendChild(defs);
-
-    function addDataLabel(pt) {
-      var label = document.createElementNS(svgNs, 'text');
-      label.setAttribute('class', 'data-label');
-      label.setAttribute('x', pt[0].toFixed(2));
-      label.setAttribute('y', (pt[1] - 6).toFixed(2));
-      label.setAttribute('text-anchor', 'middle');
-      label.textContent = formatMetricValue(metric.format, pt[2]);
-      svg.appendChild(label);
-    }
-
-    geo.segments.forEach(function (pts) {
-      if (pts.length === 1) {
-        // A single-point segment (e.g. one bucket of data) has no line to
-        // draw; show a dot instead so it isn't rendered as an empty chart.
-        var dot = document.createElementNS(svgNs, 'circle');
-        dot.setAttribute('cx', pts[0][0].toFixed(2));
-        dot.setAttribute('cy', pts[0][1].toFixed(2));
-        dot.setAttribute('r', '3.5');
-        dot.setAttribute('fill', BLUE);
-        svg.appendChild(dot);
-        addDataLabel(pts[0]);
-        return;
-      }
-
-      var linePath = segmentToLinePath(pts);
-
-      var areaPath = document.createElementNS(svgNs, 'path');
-      var closedPath = linePath +
-        'L' + pts[pts.length - 1][0].toFixed(2) + ',' + geo.baselineY.toFixed(2) + ' ' +
-        'L' + pts[0][0].toFixed(2) + ',' + geo.baselineY.toFixed(2) + ' Z';
-      areaPath.setAttribute('d', closedPath);
-      areaPath.setAttribute('fill', 'url(#areaGrad-' + gradId + ')');
-      areaPath.setAttribute('stroke', 'none');
-      svg.appendChild(areaPath);
-
-      var linePathEl = document.createElementNS(svgNs, 'path');
-      linePathEl.setAttribute('d', linePath);
-      linePathEl.setAttribute('fill', 'none');
-      linePathEl.setAttribute('stroke', 'url(#lineGrad-' + gradId + ')');
-      linePathEl.setAttribute('stroke-width', '2');
-      linePathEl.setAttribute('stroke-linecap', 'round');
-      linePathEl.setAttribute('stroke-linejoin', 'round');
-      linePathEl.setAttribute('vector-effect', 'non-scaling-stroke');
-      svg.appendChild(linePathEl);
-
-      pts.forEach(addDataLabel);
-    });
+    var isSplit = metric.series.length > 1;
 
     svg.addEventListener('dragstart', function (e) {
       e.preventDefault();
     });
-    svg.addEventListener('mousemove', function (e) {
-      var rect = svg.getBoundingClientRect();
-      var fraction = (e.clientX - rect.left) / rect.width;
-      var xInViewBox = fraction * width;
-      var n = metric.values.length;
-      var idx = n > 1 ? Math.round(((xInViewBox - padX) / (width - padX * 2)) * (n - 1)) : 0;
-      idx = Math.max(0, Math.min(n - 1, idx));
-      showTooltip(e.clientX, e.clientY, timeLabels[idx], metric.name, metric.values[idx], metric.format);
-    });
-    svg.addEventListener('mouseleave', function () {
-      hideTooltip();
-    });
+
+    if (state.chartType === 'bar') {
+      renderBars(svg, metric, timeLabels, isSplit);
+    } else {
+      renderLines(svg, metric, timeLabels, gradId, isSplit);
+    }
 
     card.appendChild(svg);
 
@@ -921,6 +1161,29 @@
     gridEl.classList.toggle('labels-visible', pxPerPoint >= LABEL_MIN_PX_PER_POINT);
   }
 
+  function updateLegend() {
+    if (!legendEl) return;
+    legendEl.innerHTML = '';
+    if (!lastSplitLegend || lastSplitLegend.length < 2) {
+      legendEl.classList.add('hidden');
+      return;
+    }
+    legendEl.classList.remove('hidden');
+    lastSplitLegend.forEach(function (entry) {
+      var item = document.createElement('div');
+      item.className = 'legend-item';
+      var swatch = document.createElement('span');
+      swatch.className = 'legend-swatch';
+      swatch.style.background = entry.color;
+      var label = document.createElement('span');
+      label.className = 'legend-label';
+      label.textContent = entry.label;
+      item.appendChild(swatch);
+      item.appendChild(label);
+      legendEl.appendChild(item);
+    });
+  }
+
   function updateToolbarVisibility() {
     if (toolbarEls.incompleteGroup) {
       toolbarEls.incompleteGroup.classList.toggle('hidden', INCOMPLETE_RELEVANT.indexOf(state.granularity) === -1);
@@ -935,6 +1198,26 @@
     label.textContent = labelText;
     group.appendChild(label);
     return group;
+  }
+
+  function buildSegmented(options, currentValue, onChange) {
+    var segmented = document.createElement('div');
+    segmented.className = 'segmented';
+    options.forEach(function (opt) {
+      var btn = document.createElement('button');
+      btn.type = 'button';
+      btn.textContent = opt.label;
+      if (opt.value === currentValue) btn.classList.add('active');
+      btn.addEventListener('click', function () {
+        Array.prototype.forEach.call(segmented.querySelectorAll('button'), function (b) {
+          b.classList.remove('active');
+        });
+        btn.classList.add('active');
+        onChange(opt.value);
+      });
+      segmented.appendChild(btn);
+    });
+    return segmented;
   }
 
   function buildToolbar() {
@@ -998,7 +1281,7 @@
     toolbarEls.endInput = endInput;
 
     // Hide incomplete period
-    var incompleteGroup = buildToolbarGroup(' ');
+    var incompleteGroup = buildToolbarGroup(' ');
     var checkboxRow = document.createElement('div');
     checkboxRow.className = 'checkbox-row';
     var checkbox = document.createElement('input');
@@ -1019,29 +1302,32 @@
     left.appendChild(incompleteGroup);
     toolbarEls.incompleteGroup = incompleteGroup;
 
+    // Chart type
+    var chartTypeGroup = buildToolbarGroup('Chart Type');
+    var chartTypeSegmented = buildSegmented(
+      [{ value: 'line', label: 'Line' }, { value: 'bar', label: 'Bar' }],
+      state.chartType,
+      function (value) {
+        state.chartType = value;
+        saveSettings();
+        renderGrid();
+      }
+    );
+    chartTypeGroup.appendChild(chartTypeSegmented);
+    right.appendChild(chartTypeGroup);
+
     // Charts per row
     var perRowGroup = buildToolbarGroup('Charts Per Row');
-    var segmented = document.createElement('div');
-    segmented.className = 'segmented';
+    var perRowOptions = [];
     for (var n = MIN_CHARTS_PER_ROW; n <= MAX_CHARTS_PER_ROW; n++) {
-      (function (value) {
-        var btn = document.createElement('button');
-        btn.type = 'button';
-        btn.textContent = String(value);
-        if (value === state.chartsPerRow) btn.classList.add('active');
-        btn.addEventListener('click', function () {
-          state.chartsPerRow = value;
-          Array.prototype.forEach.call(segmented.querySelectorAll('button'), function (b) {
-            b.classList.remove('active');
-          });
-          btn.classList.add('active');
-          saveSettings();
-          renderGrid();
-        });
-        segmented.appendChild(btn);
-      })(n);
+      perRowOptions.push({ value: n, label: String(n) });
     }
-    perRowGroup.appendChild(segmented);
+    var perRowSegmented = buildSegmented(perRowOptions, state.chartsPerRow, function (value) {
+      state.chartsPerRow = value;
+      saveSettings();
+      renderGrid();
+    });
+    perRowGroup.appendChild(perRowSegmented);
     right.appendChild(perRowGroup);
 
     toolbar.appendChild(left);
@@ -1053,6 +1339,9 @@
   function buildApp() {
     appEl.innerHTML = '';
     appEl.appendChild(buildToolbar());
+    legendEl = document.createElement('div');
+    legendEl.className = 'legend hidden';
+    appEl.appendChild(legendEl);
     gridEl = document.createElement('div');
     gridEl.className = 'grid';
     appEl.appendChild(gridEl);
@@ -1085,6 +1374,9 @@
 
       var savedEnd = settings.get('endDate');
       if (savedEnd) state.endDate = savedEnd;
+
+      var savedChartType = settings.get('chartType');
+      if (savedChartType === 'line' || savedChartType === 'bar') state.chartType = savedChartType;
     } catch (e) {
       // no saved settings yet; defaults stand
     }
@@ -1099,6 +1391,7 @@
       settings.set('hideIncomplete', String(state.hideIncomplete));
       settings.set('startDate', state.startDate);
       settings.set('endDate', state.endDate);
+      settings.set('chartType', state.chartType);
       settings.saveAsync();
     } catch (e) {
       // ignore persistence failures
