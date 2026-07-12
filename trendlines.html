@@ -4,13 +4,19 @@
 <meta charset="utf-8">
 <title>Trendlines</title>
 <style>
+  /* Tokens ported from the Violet DS v2 component reference. */
   :root {
-    --bg: #F3F1FA;
+    --bg: #F7F7FB;
     --card-bg: #FFFFFF;
-    --ink: #1C2544;
-    --muted: #767B99;
-    --purple: #7B61FF;
-    --blue: #4C82FB;
+    --ink: #1F2152;
+    --ink2: #565A7E;
+    --muted: #9094AD;
+    --accent: #5B4EE8;
+    --accent-text: #4A3DD6;
+    --tint: #EEEBFC;
+    --violet: #7F69F6;
+    --border: #E6E6EE;
+    --grid-track: #ECECF3;
     --radius: 16px;
   }
   html, body {
@@ -40,14 +46,12 @@
     align-items: flex-end;
     justify-content: space-between;
     gap: 14px 24px;
-    background: rgba(255, 255, 255, 0.55);
-    backdrop-filter: blur(10px);
-    -webkit-backdrop-filter: blur(10px);
-    border-radius: 14px;
+    background: var(--card-bg);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
     padding: 12px 16px;
     margin-bottom: 18px;
-    box-shadow: 0 4px 16px rgba(28, 37, 68, 0.06);
-    border-bottom: 1px solid rgba(28, 37, 68, 0.08);
+    box-shadow: 0 1px 2px rgba(31, 33, 82, 0.05);
   }
   .toolbar-left, .toolbar-right {
     display: flex;
@@ -76,16 +80,28 @@
     letter-spacing: 0.03em;
   }
   .control {
-    border: none;
-    border-radius: 10px;
-    background: #FFFFFF;
-    box-shadow: 0 2px 8px rgba(28, 37, 68, 0.07);
-    padding: 6px 10px;
-    font-size: 12px;
+    -webkit-appearance: none;
+    appearance: none;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background-color: #FFFFFF;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' width='14' height='14' fill='none' stroke='%239094AD' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 8px center;
+    padding: 7px 26px 7px 10px;
+    font-size: 13px;
     color: var(--ink);
     font-family: inherit;
     outline: none;
     cursor: pointer;
+    transition: background-color 0.1s ease;
+  }
+  .control:hover {
+    background-color: #FAFAFB;
+  }
+  input.control[type="date"] {
+    background-image: none;
+    padding: 7px 10px;
   }
   .checkbox-row {
     display: flex;
@@ -94,7 +110,7 @@
     height: 30px;
   }
   .checkbox-row input[type="checkbox"] {
-    accent-color: var(--purple);
+    accent-color: var(--accent);
     width: 14px;
     height: 14px;
     cursor: pointer;
@@ -106,19 +122,20 @@
   }
   .segmented {
     display: flex;
-    background: #FFFFFF;
-    border-radius: 999px;
+    align-items: center;
+    gap: 2px;
+    background: var(--grid-track);
+    border-radius: 8px;
     padding: 3px;
-    box-shadow: 0 2px 8px rgba(28, 37, 68, 0.07);
   }
   .segmented button {
     border: none;
     background: transparent;
     color: var(--muted);
-    font-size: 12px;
-    font-weight: 600;
-    padding: 5px 11px;
-    border-radius: 999px;
+    font-size: 13px;
+    font-weight: 500;
+    padding: 5px 10px;
+    border-radius: 6px;
     cursor: pointer;
     font-family: inherit;
     transition: background 0.15s ease, color 0.15s ease;
@@ -127,8 +144,9 @@
     color: var(--ink);
   }
   .segmented button.active {
-    background: linear-gradient(135deg, var(--purple), var(--blue));
-    color: #FFFFFF;
+    background: #FFFFFF;
+    color: var(--accent-text);
+    box-shadow: 0 1px 2px rgba(31, 33, 82, 0.08);
   }
   .grid {
     display: grid;
@@ -141,7 +159,8 @@
     border-radius: var(--radius);
     padding: 14px 14px 10px 14px;
     background: var(--card-bg);
-    box-shadow: 0 6px 20px rgba(28, 37, 68, 0.08), 0 1px 3px rgba(28, 37, 68, 0.06);
+    border: 1px solid var(--border);
+    box-shadow: 0 1px 2px rgba(31, 33, 82, 0.05);
     cursor: grab;
     transition: opacity 0.15s ease, transform 0.15s ease;
   }
@@ -156,7 +175,7 @@
     bottom: 6px;
     width: 3px;
     border-radius: 2px;
-    background: linear-gradient(180deg, var(--purple), var(--blue));
+    background: var(--accent);
   }
   .card.drop-indicator-left::before {
     left: -10px;
@@ -183,7 +202,7 @@
   .data-label {
     font-size: 7px;
     font-weight: 600;
-    fill: #5B3FC9;
+    fill: var(--accent-text);
     pointer-events: none;
     display: none;
   }
@@ -193,7 +212,7 @@
   .legend {
     display: flex;
     flex-wrap: wrap;
-    justify-content: flex-end;
+    justify-content: flex-start;
     gap: 6px 14px;
     margin-bottom: 14px;
   }
@@ -205,7 +224,7 @@
     align-items: center;
     gap: 5px;
     font-size: 11px;
-    color: var(--ink);
+    color: var(--ink2);
   }
   .legend-swatch {
     width: 10px;
@@ -233,11 +252,11 @@
     pointer-events: none;
     background: var(--ink);
     color: #FFFFFF;
-    font-size: 11px;
+    font-size: 12px;
     line-height: 1.5;
-    padding: 6px 9px;
-    border-radius: 8px;
-    box-shadow: 0 4px 12px rgba(28, 37, 68, 0.25);
+    padding: 8px 12px;
+    border-radius: 10px;
+    box-shadow: 0 8px 24px rgba(31, 33, 82, 0.2);
     z-index: 1000;
     opacity: 0;
     transition: opacity 0.1s ease;
@@ -247,8 +266,8 @@
     opacity: 1;
   }
   .chart-tooltip .tt-date {
-    color: #C7CCE3;
-    font-weight: 500;
+    color: #C9C7E8;
+    font-weight: 600;
   }
   .chart-tooltip .tt-metric {
     font-weight: 600;
@@ -268,15 +287,14 @@
   var MIN_CHARTS_PER_ROW = 3;
   var MAX_CHARTS_PER_ROW = 5;
   var DEFAULT_CHARTS_PER_ROW = 4;
-  var PURPLE = '#7B61FF';
-  var BLUE = '#4C82FB';
-  var LABEL_COLOR = '#5B3FC9';
-  var OTHER_COLOR = '#8A8FA6';
+  // Tokens ported from the Violet DS v2 component reference.
+  var VIOLET = '#7F69F6';
+  var LABEL_COLOR = '#4A3DD6';
+  var OTHER_COLOR = '#9094AD';
   var MAX_SPLIT_COLORS = 8;
   var DEFAULT_SERIES_KEY = '__default__';
-  // Validated categorical palette (fixed order — see dataviz skill palette.md):
-  // blue, aqua, yellow, green, violet, red, magenta, orange.
-  var CATEGORICAL_PALETTE = ['#2a78d6', '#1baf7a', '#eda100', '#008300', '#4a3aa7', '#e34948', '#e87ba4', '#eb6834'];
+  // First 8 of the reference file's EXTENDED categorical palette, fixed order.
+  var CATEGORICAL_PALETTE = ['#7F69F6', '#1F2152', '#1CC8DB', '#E3A008', '#F2741B', '#EC4899', '#0E9E84', '#3B6FE2'];
   var MONTH_ABBR = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
   var DAY_MS = 86400000;
 
@@ -295,6 +313,7 @@
   var TRAILING_N = { trailing7: 7, trailing14: 14, trailing21: 21, trailing28: 28, trailing35: 35 };
   var INCOMPLETE_RELEVANT = ['weekly', 'monthly', 'quarterly', 'yearly'];
   var WEEK_START_PARAMETER_NAME = 'Week Start Day';
+  var SPLITS_PARAMETER_NAME = 'Splits';
   var CHART_WIDTH = 300;
   var CHART_HEIGHT = 100;
   var CHART_PAD_TOP = 10;
@@ -309,6 +328,8 @@
   var toolbarEls = {};
   var appBuilt = false;
   var dragSrcName = null;
+  var splitsParameter = null;
+  var splitsParamOptions = [];
 
   var state = {
     chartsPerRow: DEFAULT_CHARTS_PER_ROW,
@@ -809,27 +830,19 @@
 
     var defs = document.createElementNS(svgNs, 'defs');
     if (!isSplit) {
+      // Single-hue area fade (per the reference MiniArea component): the
+      // series color at ~35% opacity fading to ~3%, rather than a two-tone
+      // gradient.
       var areaGrad = document.createElementNS(svgNs, 'linearGradient');
       areaGrad.setAttribute('id', 'areaGrad-' + gradId);
       areaGrad.setAttribute('x1', '0'); areaGrad.setAttribute('y1', '0');
       areaGrad.setAttribute('x2', '0'); areaGrad.setAttribute('y2', '1');
       var stop1 = document.createElementNS(svgNs, 'stop');
-      stop1.setAttribute('offset', '0%'); stop1.setAttribute('stop-color', PURPLE); stop1.setAttribute('stop-opacity', '0.28');
+      stop1.setAttribute('offset', '0%'); stop1.setAttribute('stop-color', VIOLET); stop1.setAttribute('stop-opacity', '0.35');
       var stop2 = document.createElementNS(svgNs, 'stop');
-      stop2.setAttribute('offset', '100%'); stop2.setAttribute('stop-color', BLUE); stop2.setAttribute('stop-opacity', '0');
+      stop2.setAttribute('offset', '100%'); stop2.setAttribute('stop-color', VIOLET); stop2.setAttribute('stop-opacity', '0.03');
       areaGrad.appendChild(stop1); areaGrad.appendChild(stop2);
       defs.appendChild(areaGrad);
-
-      var lineGrad = document.createElementNS(svgNs, 'linearGradient');
-      lineGrad.setAttribute('id', 'lineGrad-' + gradId);
-      lineGrad.setAttribute('x1', '0'); lineGrad.setAttribute('y1', '0');
-      lineGrad.setAttribute('x2', '1'); lineGrad.setAttribute('y2', '0');
-      var lstop1 = document.createElementNS(svgNs, 'stop');
-      lstop1.setAttribute('offset', '0%'); lstop1.setAttribute('stop-color', PURPLE);
-      var lstop2 = document.createElementNS(svgNs, 'stop');
-      lstop2.setAttribute('offset', '100%'); lstop2.setAttribute('stop-color', BLUE);
-      lineGrad.appendChild(lstop1); lineGrad.appendChild(lstop2);
-      defs.appendChild(lineGrad);
     }
     svg.appendChild(defs);
 
@@ -839,7 +852,7 @@
 
     metric.series.forEach(function (seriesObj, si) {
       var geo = seriesGeo[si];
-      var strokeColor = isSplit ? seriesObj.color : ('url(#lineGrad-' + gradId + ')');
+      var strokeColor = isSplit ? seriesObj.color : VIOLET;
 
       geo.segments.forEach(function (pts) {
         if (pts.length === 1) {
@@ -847,7 +860,7 @@
           dot.setAttribute('cx', pts[0][0].toFixed(2));
           dot.setAttribute('cy', pts[0][1].toFixed(2));
           dot.setAttribute('r', '3.5');
-          dot.setAttribute('fill', isSplit ? seriesObj.color : BLUE);
+          dot.setAttribute('fill', isSplit ? seriesObj.color : VIOLET);
           svg.appendChild(dot);
           if (!isSplit) addDataLabel(svg, pts[0][0], pts[0][1], pts[0][2], metric.format);
           return;
@@ -902,7 +915,7 @@
 
       var chosen = metric.series[bestSi];
       var ptX = xForIndex(idx, n, width, padX);
-      var dotColor = isSplit ? chosen.color : BLUE;
+      var dotColor = isSplit ? chosen.color : VIOLET;
       positionHoverDot(hoverDot, ptX, bestY, dotColor);
 
       var label = isSplit ? (chosen.label + ' — ' + metric.name) : metric.name;
@@ -912,6 +925,24 @@
       hideTooltip();
       hideHoverDot(hoverDot);
     });
+  }
+
+  // Rounded top corners, square base — matches the reference bar spec
+  // (radius on the data-end only, flush against the baseline).
+  function roundedTopRectPath(x, y, w, h, r) {
+    r = Math.max(0, Math.min(r, w / 2, h));
+    if (r <= 0) {
+      return 'M' + x.toFixed(2) + ',' + (y + h).toFixed(2) +
+        ' L' + x.toFixed(2) + ',' + y.toFixed(2) +
+        ' L' + (x + w).toFixed(2) + ',' + y.toFixed(2) +
+        ' L' + (x + w).toFixed(2) + ',' + (y + h).toFixed(2) + ' Z';
+    }
+    return 'M' + x.toFixed(2) + ',' + (y + h).toFixed(2) +
+      ' L' + x.toFixed(2) + ',' + (y + r).toFixed(2) +
+      ' Q' + x.toFixed(2) + ',' + y.toFixed(2) + ' ' + (x + r).toFixed(2) + ',' + y.toFixed(2) +
+      ' L' + (x + w - r).toFixed(2) + ',' + y.toFixed(2) +
+      ' Q' + (x + w).toFixed(2) + ',' + y.toFixed(2) + ' ' + (x + w).toFixed(2) + ',' + (y + r).toFixed(2) +
+      ' L' + (x + w).toFixed(2) + ',' + (y + h).toFixed(2) + ' Z';
   }
 
   function renderBars(svg, metric, timeLabels, isSplit) {
@@ -945,14 +976,10 @@
         var top = Math.min(barY, baselineY);
         var barH = Math.abs(baselineY - barY);
 
-        var rect = document.createElementNS(svgNs, 'rect');
-        rect.setAttribute('x', barX.toFixed(2));
-        rect.setAttribute('y', top.toFixed(2));
-        rect.setAttribute('width', barWidth.toFixed(2));
-        rect.setAttribute('height', barH.toFixed(2));
-        rect.setAttribute('rx', '1.5');
-        rect.setAttribute('fill', isSplit ? s.color : BLUE);
-        svg.appendChild(rect);
+        var bar = document.createElementNS(svgNs, 'path');
+        bar.setAttribute('d', roundedTopRectPath(barX, top, barWidth, barH, Math.min(3, barWidth / 2)));
+        bar.setAttribute('fill', isSplit ? s.color : VIOLET);
+        svg.appendChild(bar);
 
         if (!isSplit) {
           addDataLabel(svg, barX + barWidth / 2, top, v, metric.format);
@@ -975,7 +1002,7 @@
       var v = chosen.values[idx];
       var barY = yForValue(v, scale, height, padTop, padBottom);
       var barCenterX = groupStart + si * (barWidth + barGap) + barWidth / 2;
-      var dotColor = isSplit ? chosen.color : BLUE;
+      var dotColor = isSplit ? chosen.color : VIOLET;
       positionHoverDot(hoverDot, barCenterX, Math.min(barY, baselineY), dotColor);
 
       var label = isSplit ? (chosen.label + ' — ' + metric.name) : metric.name;
@@ -1250,6 +1277,28 @@
     granGroup.appendChild(granSelect);
     left.appendChild(granGroup);
 
+    // Splits (Tableau Parameter — hidden entirely if the workbook doesn't
+    // have one named "Splits", or if it isn't a list-type parameter).
+    if (splitsParameter && splitsParamOptions.length > 0) {
+      var splitsGroup = buildToolbarGroup('Splits');
+      var splitsSelect = document.createElement('select');
+      splitsSelect.className = 'control';
+      splitsParamOptions.forEach(function (opt) {
+        var o = document.createElement('option');
+        o.value = String(opt.value);
+        o.textContent = opt.label;
+        splitsSelect.appendChild(o);
+      });
+      syncSplitsSelectValue(splitsSelect);
+      splitsSelect.addEventListener('change', function () {
+        var opt = splitsParamOptions[splitsSelect.selectedIndex];
+        splitsParameter.changeValueAsync(opt.value);
+      });
+      splitsGroup.appendChild(splitsSelect);
+      left.appendChild(splitsGroup);
+      toolbarEls.splitsSelect = splitsSelect;
+    }
+
     // Start date
     var startGroup = buildToolbarGroup('Start Date');
     var startInput = document.createElement('input');
@@ -1421,6 +1470,41 @@
     });
   }
 
+  // "Splits" is a Tableau Parameter (typically driving a calculated field
+  // that feeds the "Splits" marks-card encoding) rather than a field itself,
+  // so it's surfaced as a live, two-way dropdown: picking an option here
+  // calls changeValueAsync to actually update the parameter in Tableau, and
+  // external changes (e.g. from a native parameter control elsewhere on the
+  // dashboard) sync back into this dropdown via ParameterChanged.
+  function extractParameterOptions(param) {
+    var av = param.allowableValues;
+    if (!av || av.type !== tableau.ParameterValueType.List || !av.allowableValues) return [];
+    return av.allowableValues.map(function (dv) {
+      var label = dv.formattedValue !== undefined && dv.formattedValue !== null ? dv.formattedValue : String(dv.value);
+      return { value: dv.value, label: label };
+    });
+  }
+
+  function syncSplitsSelectValue(select) {
+    if (!splitsParameter || !select) return;
+    var current = splitsParameter.currentValue.value;
+    var idx = splitsParamOptions.findIndex(function (opt) { return String(opt.value) === String(current); });
+    if (idx !== -1) select.selectedIndex = idx;
+  }
+
+  function loadSplitsParameter(worksheet) {
+    return worksheet.findParameterAsync(SPLITS_PARAMETER_NAME).then(function (param) {
+      if (!param) return;
+      splitsParameter = param;
+      splitsParamOptions = extractParameterOptions(param);
+      param.addEventListener(tableau.TableauEventType.ParameterChanged, function () {
+        syncSplitsSelectValue(toolbarEls.splitsSelect);
+      });
+    }).catch(function () {
+      // Parameter not found in this workbook; dropdown stays hidden.
+    });
+  }
+
   function render(dataTable) {
     var picked = pickColumns(dataTable.columns);
 
@@ -1451,7 +1535,10 @@
     var worksheet = tableau.extensions.worksheetContent.worksheet;
 
     loadSettings();
-    loadWeekStartParameter(worksheet).then(function () {
+    Promise.all([
+      loadWeekStartParameter(worksheet),
+      loadSplitsParameter(worksheet)
+    ]).then(function () {
       ensureDefaultDateRange();
       refresh(worksheet);
     });
