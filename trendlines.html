@@ -67,6 +67,18 @@
   .toolbar-group.hidden {
     display: none;
   }
+  .toolbar-group-highlight {
+    background: var(--tint);
+    border-radius: 10px;
+    padding: 6px 10px;
+    margin: -6px 0;
+  }
+  .toolbar-group-highlight .toolbar-label {
+    color: var(--accent-text);
+  }
+  .toolbar-group-highlight .control {
+    border-color: var(--accent);
+  }
   .toolbar-control {
     display: flex;
     align-items: center;
@@ -333,8 +345,8 @@
     top: 100%;
     left: 0;
     margin-top: 4px;
-    min-width: 210px;
-    max-width: 280px;
+    min-width: 240px;
+    max-width: 420px;
     background: #FFFFFF;
     border: 1px solid var(--border);
     border-radius: 10px;
@@ -399,6 +411,71 @@
   }
   .multiselect-apply:hover {
     background: var(--accent-text);
+  }
+  .download-popup {
+    min-width: 240px;
+  }
+  .download-quick-actions {
+    display: flex;
+    gap: 6px;
+    margin-bottom: 8px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid var(--border);
+  }
+  .download-quick-actions button {
+    flex: 1;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: #FFFFFF;
+    color: var(--ink);
+    font-size: 12px;
+    font-weight: 500;
+    padding: 6px 4px;
+    cursor: pointer;
+    font-family: inherit;
+  }
+  .download-quick-actions button:hover {
+    background: #FAFAFB;
+  }
+  .download-section-label {
+    font-size: 10px;
+    color: var(--muted);
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    padding: 2px 4px 4px;
+  }
+  .card-header-row {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 6px;
+  }
+  .card-download-btn {
+    flex: none;
+    border: none;
+    background: none;
+    color: var(--muted);
+    cursor: pointer;
+    padding: 1px 2px;
+    border-radius: 4px;
+    line-height: 0;
+  }
+  .card-download-btn:hover {
+    color: var(--accent-text);
+    background: var(--tint);
+  }
+  @media print {
+    .toolbar, .filters-panel, .hover-dot, .chart-tooltip, .card-download-btn {
+      display: none !important;
+    }
+    body, #app {
+      background: #FFFFFF !important;
+    }
+    .card {
+      break-inside: avoid;
+      box-shadow: none !important;
+    }
   }
   .range-slider {
     position: relative;
@@ -1300,11 +1377,28 @@
     card.draggable = true;
     card.dataset.name = metric.name;
 
+    var titleRow = document.createElement('div');
+    titleRow.className = 'card-header-row';
+
     var title = document.createElement('div');
     title.className = 'card-title';
     title.textContent = metric.name;
     title.title = metric.name;
-    card.appendChild(title);
+    titleRow.appendChild(title);
+
+    var downloadBtn = document.createElement('button');
+    downloadBtn.type = 'button';
+    downloadBtn.className = 'card-download-btn';
+    downloadBtn.title = 'Download chart as JPG';
+    downloadBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>';
+    downloadBtn.addEventListener('dragstart', function (e) { e.preventDefault(); e.stopPropagation(); });
+    downloadBtn.addEventListener('click', function (e) {
+      e.stopPropagation();
+      exportCardAsJpg(metric);
+    });
+    titleRow.appendChild(downloadBtn);
+
+    card.appendChild(titleRow);
 
     var svg = buildChartSvg(metric, timeLabels, gradId, null);
     card.appendChild(svg);
@@ -1771,6 +1865,331 @@
     return { el: wrap, refreshLabel: updateToggleLabel };
   }
 
+  function sanitizeFilename(str) {
+    return String(str).replace(/[^a-z0-9]+/gi, '-').replace(/^-+|-+$/g, '') || 'chart';
+  }
+
+  function triggerDownload(blob, filename) {
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(function () { URL.revokeObjectURL(url); }, 2000);
+  }
+
+  function csvEscape(value) {
+    var s = value === null || value === undefined ? '' : String(value);
+    if (/[",\r\n]/.test(s)) s = '"' + s.replace(/"/g, '""') + '"';
+    return s;
+  }
+
+  // One column per metric (or per split-series within a metric), one row
+  // per bucket already shown on screen — exports exactly what's currently
+  // rendered (same granularity, date range, and splits), not raw source rows.
+  function downloadCsv(metricNames) {
+    var metrics = lastMetrics.filter(function (m) { return metricNames.indexOf(m.name) !== -1; });
+    if (metrics.length === 0) return;
+
+    var header = ['Date'];
+    var columns = [];
+    metrics.forEach(function (m) {
+      if (m.series.length > 1) {
+        m.series.forEach(function (s) {
+          header.push(m.name + ' - ' + (s.label || s.key));
+          columns.push(s.values);
+        });
+      } else {
+        header.push(m.name);
+        columns.push(m.series[0].values);
+      }
+    });
+
+    var lines = [header.map(csvEscape).join(',')];
+    lastTimeLabels.forEach(function (label, i) {
+      var row = [label];
+      columns.forEach(function (values) { row.push(values[i]); });
+      lines.push(row.map(csvEscape).join(','));
+    });
+
+    var blob = new Blob([lines.join('\r\n')], { type: 'text/csv;charset=utf-8;' });
+    triggerDownload(blob, 'trendlines-data.csv');
+  }
+
+  function roundRectPath2D(x, y, w, h, r) {
+    var p = new Path2D();
+    p.moveTo(x + r, y);
+    p.arcTo(x + w, y, x + w, y + h, r);
+    p.arcTo(x + w, y + h, x, y + h, r);
+    p.arcTo(x, y + h, x, y, r);
+    p.arcTo(x, y, x + w, y, r);
+    p.closePath();
+    return p;
+  }
+
+  // Draws one metric's chart using the exact same path-generation
+  // functions as the live SVG (buildGeometry / segmentToLinePath /
+  // roundedTopRectPath all just produce SVG path syntax, which the canvas
+  // Path2D API can stroke/fill directly), inside the caller's already-set
+  // transform mapping CHART_WIDTH x CHART_HEIGHT units onto the target area.
+  function drawChartOnCanvas(ctx, metric) {
+    var width = CHART_WIDTH, height = CHART_HEIGHT, padTop = CHART_PAD_TOP, padBottom = CHART_PAD_BOTTOM, padX = CHART_PAD_X;
+    var isSplit = metric.series.length > 1;
+    var allValues = [];
+    metric.series.forEach(function (s) { allValues = allValues.concat(s.values); });
+
+    if (state.chartType === 'bar') {
+      var n = lastTimeLabels.length, S = metric.series.length;
+      var hasOverride = !!state.axisOverrides[metric.name];
+      var scale = resolveScale(metric, allValues, null);
+      if (!hasOverride) scale.min = Math.min(0, scale.min);
+      var innerW = width - padX * 2;
+      var slotWidth = n > 0 ? innerW / n : innerW;
+      var groupWidth = slotWidth * 0.7;
+      var barGap = S > 1 ? 2 : 0;
+      var rawBarWidth = (groupWidth - barGap * (S - 1)) / S;
+      var barWidth = Math.max(2, Math.min(20, rawBarWidth));
+      var actualGroupWidth = barWidth * S + barGap * (S - 1);
+      var baselineY = yForValue(0, scale, height, padTop, padBottom);
+      for (var j = 0; j < n; j++) {
+        var slotStart = padX + j * slotWidth + (slotWidth - actualGroupWidth) / 2;
+        metric.series.forEach(function (s, si) {
+          var v = s.values[j];
+          var barX = slotStart + si * (barWidth + barGap);
+          var barY = yForValue(v, scale, height, padTop, padBottom);
+          var top = Math.min(barY, baselineY);
+          var barH = Math.abs(baselineY - barY);
+          var p2d = new Path2D(roundedTopRectPath(barX, top, barWidth, barH, Math.min(3, barWidth / 2)));
+          ctx.fillStyle = isSplit ? s.color : VIOLET;
+          ctx.fill(p2d);
+        });
+      }
+      return;
+    }
+
+    var scale = resolveScale(metric, allValues, null);
+    metric.series.forEach(function (seriesObj) {
+      var geo = buildGeometry(seriesObj.values, scale, width, height, padTop, padBottom, padX);
+      var color = isSplit ? seriesObj.color : VIOLET;
+      geo.segments.forEach(function (pts) {
+        if (pts.length === 1) {
+          ctx.beginPath();
+          ctx.arc(pts[0][0], pts[0][1], 3.5, 0, Math.PI * 2);
+          ctx.fillStyle = color;
+          ctx.fill();
+          return;
+        }
+        var linePath = segmentToLinePath(pts);
+        if (!isSplit) {
+          var closedPath = linePath +
+            'L' + pts[pts.length - 1][0].toFixed(2) + ',' + geo.baselineY.toFixed(2) + ' ' +
+            'L' + pts[0][0].toFixed(2) + ',' + geo.baselineY.toFixed(2) + ' Z';
+          var grad = ctx.createLinearGradient(0, padTop, 0, height - padBottom);
+          grad.addColorStop(0, 'rgba(127,105,246,0.35)');
+          grad.addColorStop(1, 'rgba(127,105,246,0.03)');
+          ctx.fillStyle = grad;
+          ctx.fill(new Path2D(closedPath));
+        }
+        ctx.strokeStyle = color;
+        ctx.lineWidth = 2;
+        ctx.lineJoin = 'round';
+        ctx.lineCap = 'round';
+        ctx.stroke(new Path2D(linePath));
+      });
+    });
+  }
+
+  function drawCardOnCanvas(ctx, metric, x, y, w, h) {
+    ctx.save();
+    ctx.translate(x, y);
+
+    ctx.fillStyle = '#FFFFFF';
+    ctx.fill(roundRectPath2D(0, 0, w, h, 14));
+    ctx.strokeStyle = '#E6E6EE';
+    ctx.lineWidth = 1;
+    ctx.stroke(roundRectPath2D(0.5, 0.5, w - 1, h - 1, 14));
+
+    ctx.fillStyle = '#1F2152';
+    ctx.font = '600 13px -apple-system, Helvetica, Arial, sans-serif';
+    ctx.textAlign = 'left';
+    ctx.fillText(metric.name, 16, 24, w - 32);
+
+    var chartX = 12, chartY = 32, chartW = w - 24, chartH = h - 66;
+    ctx.save();
+    ctx.translate(chartX, chartY);
+    ctx.scale(chartW / CHART_WIDTH, chartH / CHART_HEIGHT);
+    drawChartOnCanvas(ctx, metric);
+    ctx.restore();
+
+    ctx.fillStyle = '#9094AD';
+    ctx.font = '10px -apple-system, Helvetica, Arial, sans-serif';
+    // Fewer ticks than the live flexbox axis row (which self-spaces by each
+    // label's own width) — canvas text is placed by a bare x-coordinate, so
+    // fewer, more widely-spaced labels avoid overlapping at this card size.
+    var tickIdxs = pickTickIndices(lastTimeLabels.length, 4);
+    var axisY = h - 14;
+    tickIdxs.forEach(function (idx, ti) {
+      var frac = tickIdxs.length > 1 ? ti / (tickIdxs.length - 1) : 0;
+      var tx = chartX + frac * chartW;
+      ctx.textAlign = ti === 0 ? 'left' : (ti === tickIdxs.length - 1 ? 'right' : 'center');
+      ctx.fillText(lastTimeLabels[idx], tx, axisY);
+    });
+
+    ctx.restore();
+  }
+
+  function visibleOrderedMetrics() {
+    return applyOrder(lastMetrics.filter(function (m) { return state.hiddenMetrics.indexOf(m.name) === -1; }));
+  }
+
+  function exportCardAsJpg(metric) {
+    var scaleFactor = 3;
+    var width = 340, height = 210;
+    var canvas = document.createElement('canvas');
+    canvas.width = width * scaleFactor;
+    canvas.height = height * scaleFactor;
+    var ctx = canvas.getContext('2d');
+    ctx.scale(scaleFactor, scaleFactor);
+    ctx.fillStyle = '#F7F7FB';
+    ctx.fillRect(0, 0, width, height);
+    drawCardOnCanvas(ctx, metric, 0, 0, width, height);
+    canvas.toBlob(function (blob) {
+      if (blob) triggerDownload(blob, 'trendlines-' + sanitizeFilename(metric.name) + '.jpg');
+    }, 'image/jpeg', 0.92);
+  }
+
+  function exportPageAsJpg() {
+    var metrics = visibleOrderedMetrics();
+    if (metrics.length === 0) return;
+    var cols = state.chartsPerRow;
+    var rows = Math.ceil(metrics.length / cols);
+    var cardW = 340, cardH = 210, gap = 16, pad = 20, headerH = 40;
+    var totalW = pad * 2 + cols * cardW + (cols - 1) * gap;
+    var totalH = pad * 2 + headerH + rows * cardH + (rows - 1) * gap;
+    var scaleFactor = 2;
+
+    var canvas = document.createElement('canvas');
+    canvas.width = totalW * scaleFactor;
+    canvas.height = totalH * scaleFactor;
+    var ctx = canvas.getContext('2d');
+    ctx.scale(scaleFactor, scaleFactor);
+    ctx.fillStyle = '#F7F7FB';
+    ctx.fillRect(0, 0, totalW, totalH);
+    ctx.fillStyle = '#1F2152';
+    ctx.font = '700 18px -apple-system, Helvetica, Arial, sans-serif';
+    ctx.textAlign = 'left';
+    ctx.fillText('Trendlines', pad, pad + 12);
+
+    metrics.forEach(function (metric, i) {
+      var col = i % cols, row = Math.floor(i / cols);
+      var x = pad + col * (cardW + gap);
+      var y = pad + headerH + row * (cardH + gap);
+      drawCardOnCanvas(ctx, metric, x, y, cardW, cardH);
+    });
+
+    canvas.toBlob(function (blob) {
+      if (blob) triggerDownload(blob, 'trendlines-page.jpg');
+    }, 'image/jpeg', 0.92);
+  }
+
+  function exportPageAsPdf() {
+    window.print();
+  }
+
+  // The Download control combines two direct actions (whole page as
+  // PDF/JPG) with a deferred-apply metrics checklist for CSV export, so
+  // picking a subset of metrics doesn't trigger a download per checkbox click.
+  function buildDownloadMenu() {
+    var wrap = document.createElement('div');
+    wrap.className = 'multiselect';
+
+    var toggleBtn = document.createElement('button');
+    toggleBtn.type = 'button';
+    toggleBtn.className = 'control multiselect-toggle';
+    toggleBtn.textContent = 'Download';
+
+    var popup = document.createElement('div');
+    popup.className = 'multiselect-popup download-popup hidden';
+
+    function closePopup() { popup.classList.add('hidden'); }
+    toggleBtn.addEventListener('click', function (e) {
+      e.stopPropagation();
+      popup.classList.toggle('hidden');
+    });
+    document.addEventListener('click', function (e) {
+      if (!wrap.contains(e.target)) closePopup();
+    });
+
+    var quickActions = document.createElement('div');
+    quickActions.className = 'download-quick-actions';
+    var pdfBtn = document.createElement('button');
+    pdfBtn.type = 'button';
+    pdfBtn.textContent = 'Page as PDF';
+    pdfBtn.addEventListener('click', function () { closePopup(); exportPageAsPdf(); });
+    var jpgBtn = document.createElement('button');
+    jpgBtn.type = 'button';
+    jpgBtn.textContent = 'Page as JPG';
+    jpgBtn.addEventListener('click', function () { closePopup(); exportPageAsJpg(); });
+    quickActions.appendChild(pdfBtn);
+    quickActions.appendChild(jpgBtn);
+
+    var csvLabel = document.createElement('div');
+    csvLabel.className = 'download-section-label';
+    csvLabel.textContent = 'Data as CSV';
+
+    var actions = document.createElement('div');
+    actions.className = 'multiselect-actions';
+    var allBtn = document.createElement('button');
+    allBtn.type = 'button';
+    allBtn.textContent = 'All';
+    var noneBtn = document.createElement('button');
+    noneBtn.type = 'button';
+    noneBtn.textContent = 'None';
+    actions.appendChild(allBtn);
+    actions.appendChild(noneBtn);
+
+    var list = document.createElement('div');
+    list.className = 'multiselect-list';
+    var checkboxes = [];
+    metricColumns.forEach(function (mc) {
+      var item = document.createElement('label');
+      item.className = 'multiselect-item';
+      var cb = document.createElement('input');
+      cb.type = 'checkbox';
+      cb.checked = true;
+      cb.value = mc.name;
+      var span = document.createElement('span');
+      span.textContent = mc.name;
+      item.appendChild(cb);
+      item.appendChild(span);
+      list.appendChild(item);
+      checkboxes.push(cb);
+    });
+    allBtn.addEventListener('click', function () { checkboxes.forEach(function (cb) { cb.checked = true; }); });
+    noneBtn.addEventListener('click', function () { checkboxes.forEach(function (cb) { cb.checked = false; }); });
+
+    var downloadBtn = document.createElement('button');
+    downloadBtn.type = 'button';
+    downloadBtn.className = 'multiselect-apply';
+    downloadBtn.textContent = 'Download CSV';
+    downloadBtn.addEventListener('click', function () {
+      var selected = checkboxes.filter(function (cb) { return cb.checked; }).map(function (cb) { return cb.value; });
+      closePopup();
+      downloadCsv(selected);
+    });
+
+    popup.appendChild(quickActions);
+    popup.appendChild(csvLabel);
+    popup.appendChild(list);
+    popup.appendChild(downloadBtn);
+
+    wrap.appendChild(toggleBtn);
+    wrap.appendChild(popup);
+    return wrap;
+  }
+
   function buildToolbar() {
     var toolbar = document.createElement('div');
     toolbar.className = 'toolbar';
@@ -1780,6 +2199,31 @@
 
     var right = document.createElement('div');
     right.className = 'toolbar-right';
+
+    // Splits (Tableau Parameter — hidden entirely if the workbook doesn't
+    // have one named "Splits", or if it isn't a list-type parameter). Comes
+    // first and is lightly highlighted since it changes what every chart
+    // is broken down by — the most consequential control in this row.
+    if (splitsParameter && splitsParamOptions.length > 0) {
+      var splitsGroup = buildToolbarGroup('Splits');
+      splitsGroup.classList.add('toolbar-group-highlight');
+      var splitsSelect = document.createElement('select');
+      splitsSelect.className = 'control';
+      splitsParamOptions.forEach(function (opt) {
+        var o = document.createElement('option');
+        o.value = String(opt.value);
+        o.textContent = opt.label;
+        splitsSelect.appendChild(o);
+      });
+      syncSplitsSelectValue(splitsSelect);
+      splitsSelect.addEventListener('change', function () {
+        var opt = splitsParamOptions[splitsSelect.selectedIndex];
+        splitsParameter.changeValueAsync(opt.value);
+      });
+      splitsGroup.appendChild(splitsSelect);
+      left.appendChild(splitsGroup);
+      toolbarEls.splitsSelect = splitsSelect;
+    }
 
     // Granularity
     var granGroup = buildToolbarGroup('Timeframe');
@@ -1800,28 +2244,6 @@
     });
     granGroup.appendChild(granSelect);
     left.appendChild(granGroup);
-
-    // Splits (Tableau Parameter — hidden entirely if the workbook doesn't
-    // have one named "Splits", or if it isn't a list-type parameter).
-    if (splitsParameter && splitsParamOptions.length > 0) {
-      var splitsGroup = buildToolbarGroup('Splits');
-      var splitsSelect = document.createElement('select');
-      splitsSelect.className = 'control';
-      splitsParamOptions.forEach(function (opt) {
-        var o = document.createElement('option');
-        o.value = String(opt.value);
-        o.textContent = opt.label;
-        splitsSelect.appendChild(o);
-      });
-      syncSplitsSelectValue(splitsSelect);
-      splitsSelect.addEventListener('change', function () {
-        var opt = splitsParamOptions[splitsSelect.selectedIndex];
-        splitsParameter.changeValueAsync(opt.value);
-      });
-      splitsGroup.appendChild(splitsSelect);
-      left.appendChild(splitsGroup);
-      toolbarEls.splitsSelect = splitsSelect;
-    }
 
     // Start date
     var startField = buildDateField(state.startDate, function (value) {
@@ -1936,6 +2358,11 @@
     });
     perRowGroup.appendChild(perRowSegmented);
     right.appendChild(perRowGroup);
+
+    // Download
+    var downloadGroup = buildToolbarGroup('Export');
+    downloadGroup.appendChild(buildDownloadMenu());
+    right.appendChild(downloadGroup);
 
     toolbar.appendChild(left);
     toolbar.appendChild(right);
@@ -2148,7 +2575,12 @@
         }
       });
 
-      var appliedKeys = filter.appliedValues.map(function (dv) { return String(dv.value); });
+      // When the filter is untouched (isAllSelected), Tableau's appliedValues
+      // may not enumerate every value — default the checklist to fully
+      // checked in that case, rather than showing nothing selected.
+      var appliedKeys = filter.isAllSelected
+        ? options.map(function (o) { return o.value; })
+        : filter.appliedValues.map(function (dv) { return String(dv.value); });
 
       var group = buildToolbarGroup(stripAggregation(filter.fieldName));
       var dropdown = buildMultiSelectDropdown({
@@ -2178,6 +2610,8 @@
       valueByKey[key] = dv.value;
       return { value: key, label: dv.formattedValue || key };
     });
+    // Only applied values are ever visible here (no domain fetch exists for
+    // this filter type), so the checklist is always fully checked already.
     var appliedKeys = options.map(function (o) { return o.value; });
 
     var group = buildToolbarGroup(stripAggregation(filter.fieldName));
