@@ -67,18 +67,6 @@
   .toolbar-group.hidden {
     display: none;
   }
-  .toolbar-group-highlight {
-    background: var(--tint);
-    border-radius: 10px;
-    padding: 6px 10px;
-    margin: -6px 0;
-  }
-  .toolbar-group-highlight .toolbar-label {
-    color: var(--accent-text);
-  }
-  .toolbar-group-highlight .control {
-    border-color: var(--accent);
-  }
   .toolbar-control {
     display: flex;
     align-items: center;
@@ -356,6 +344,21 @@
   .multiselect-popup.hidden {
     display: none;
   }
+  .multiselect-search {
+    width: 100%;
+    box-sizing: border-box;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 6px 8px;
+    font-size: 12px;
+    font-family: inherit;
+    color: var(--ink);
+    outline: none;
+    margin-bottom: 6px;
+  }
+  .multiselect-search:focus {
+    border-color: var(--accent);
+  }
   .multiselect-actions {
     display: flex;
     justify-content: space-between;
@@ -450,6 +453,7 @@
     align-items: flex-start;
     justify-content: space-between;
     gap: 6px;
+    margin-bottom: 10px;
   }
   .card-download-btn {
     flex: none;
@@ -551,7 +555,8 @@
     margin-top: 2px;
   }
   .axis-slider-row {
-    margin-top: 6px;
+    margin-top: 12px;
+    cursor: default;
   }
   .axis-slider-head {
     display: flex;
@@ -1364,7 +1369,11 @@
   }
 
   function rerenderCardChart(card, metric, timeLabels, gradId, scaleOverride) {
-    var oldSvg = card.querySelector('svg');
+    // Must be scoped to .card-chart — a bare 'svg' selector matches the
+    // per-card download button's inline icon <svg> first (it comes earlier
+    // in the DOM than the actual chart), which caused the chart to get
+    // inserted in place of the icon instead of replacing itself.
+    var oldSvg = card.querySelector('svg.card-chart');
     var newSvg = buildChartSvg(metric, timeLabels, gradId, scaleOverride);
     if (oldSvg && oldSvg.parentNode) {
       oldSvg.parentNode.replaceChild(newSvg, oldSvg);
@@ -1419,6 +1428,14 @@
       var natural = computeScale(allVals);
       var sliderRow = buildAxisSlider(metric, natural.min, natural.max, function (lo, hi) {
         rerenderCardChart(card, metric, timeLabels, gradId, { min: lo, max: hi });
+      });
+      // Otherwise dragging a slider thumb gets captured by the card's own
+      // native drag-and-drop instead of the range input, since the slider
+      // row sits inside a draggable="true" ancestor.
+      sliderRow.draggable = false;
+      sliderRow.addEventListener('dragstart', function (e) {
+        e.preventDefault();
+        e.stopPropagation();
       });
       card.appendChild(sliderRow);
     }
@@ -1708,6 +1725,22 @@
     }
   }
 
+  // Makes a set of controls (dropdown toggles, selects) share the width of
+  // the widest one, so a row of filters/metrics/etc. lines up instead of
+  // each hugging its own content width.
+  function equalizeControlWidths(container, selector) {
+    var els = container.querySelectorAll(selector);
+    if (els.length < 2) return;
+    Array.prototype.forEach.call(els, function (el) { el.style.width = ''; });
+    var maxWidth = 0;
+    Array.prototype.forEach.call(els, function (el) {
+      maxWidth = Math.max(maxWidth, el.getBoundingClientRect().width);
+    });
+    Array.prototype.forEach.call(els, function (el) {
+      el.style.width = Math.ceil(maxWidth) + 'px';
+    });
+  }
+
   function buildToolbarGroup(labelText) {
     var group = document.createElement('div');
     group.className = 'toolbar-group';
@@ -1787,6 +1820,11 @@
     var popup = document.createElement('div');
     popup.className = 'multiselect-popup hidden';
 
+    var searchInput = document.createElement('input');
+    searchInput.type = 'text';
+    searchInput.className = 'multiselect-search';
+    searchInput.placeholder = 'Search...';
+
     var actions = document.createElement('div');
     actions.className = 'multiselect-actions';
     var allBtn = document.createElement('button');
@@ -1801,7 +1839,9 @@
     var list = document.createElement('div');
     list.className = 'multiselect-list';
     var checkboxes = [];
-    opts.options.forEach(function (opt) {
+    var items = [];
+    var lastClickedIndex = null;
+    opts.options.forEach(function (opt, i) {
       var item = document.createElement('label');
       item.className = 'multiselect-item';
       var cb = document.createElement('input');
@@ -1813,13 +1853,39 @@
       item.appendChild(span);
       list.appendChild(item);
       checkboxes.push(cb);
+      items.push(item);
+
+      // Shift-click selects the range between the last-clicked item and
+      // this one (only among currently search-visible items), matching
+      // the usual file-picker convention.
+      cb.addEventListener('click', function (e) {
+        if (e.shiftKey && lastClickedIndex !== null) {
+          var lo = Math.min(lastClickedIndex, i);
+          var hi = Math.max(lastClickedIndex, i);
+          var checked = cb.checked;
+          for (var k = lo; k <= hi; k++) {
+            if (items[k].style.display !== 'none') checkboxes[k].checked = checked;
+          }
+        }
+        lastClickedIndex = i;
+      });
     });
+
+    searchInput.addEventListener('input', function () {
+      var q = searchInput.value.trim().toLowerCase();
+      opts.options.forEach(function (opt, i) {
+        var match = !q || opt.label.toLowerCase().indexOf(q) !== -1;
+        items[i].style.display = match ? '' : 'none';
+      });
+    });
+    searchInput.addEventListener('click', function (e) { e.stopPropagation(); });
 
     var applyBtn = document.createElement('button');
     applyBtn.type = 'button';
     applyBtn.className = 'multiselect-apply';
     applyBtn.textContent = 'Apply';
 
+    popup.appendChild(searchInput);
     popup.appendChild(actions);
     popup.appendChild(list);
     popup.appendChild(applyBtn);
@@ -1836,7 +1902,11 @@
       var selected = opts.getSelected();
       var selectedSet = selected ? new Set(selected) : new Set(opts.options.map(function (o) { return o.value; }));
       checkboxes.forEach(function (cb) { cb.checked = selectedSet.has(cb.value); });
+      searchInput.value = '';
+      items.forEach(function (item) { item.style.display = ''; });
+      lastClickedIndex = null;
       popup.classList.remove('hidden');
+      searchInput.focus();
     }
     function closePopup() {
       popup.classList.add('hidden');
@@ -1846,8 +1916,12 @@
       e.stopPropagation();
       if (popup.classList.contains('hidden')) openPopup(); else closePopup();
     });
-    allBtn.addEventListener('click', function () { checkboxes.forEach(function (cb) { cb.checked = true; }); });
-    noneBtn.addEventListener('click', function () { checkboxes.forEach(function (cb) { cb.checked = false; }); });
+    allBtn.addEventListener('click', function () {
+      checkboxes.forEach(function (cb, i) { if (items[i].style.display !== 'none') cb.checked = true; });
+    });
+    noneBtn.addEventListener('click', function () {
+      checkboxes.forEach(function (cb, i) { if (items[i].style.display !== 'none') cb.checked = false; });
+    });
     applyBtn.addEventListener('click', function () {
       var selected = checkboxes.filter(function (cb) { return cb.checked; }).map(function (cb) { return cb.value; });
       closePopup();
@@ -2190,40 +2264,12 @@
     return wrap;
   }
 
-  function buildToolbar() {
-    var toolbar = document.createElement('div');
-    toolbar.className = 'toolbar';
-
-    var left = document.createElement('div');
-    left.className = 'toolbar-left';
-
-    var right = document.createElement('div');
-    right.className = 'toolbar-right';
-
-    // Splits (Tableau Parameter — hidden entirely if the workbook doesn't
-    // have one named "Splits", or if it isn't a list-type parameter). Comes
-    // first and is lightly highlighted since it changes what every chart
-    // is broken down by — the most consequential control in this row.
-    if (splitsParameter && splitsParamOptions.length > 0) {
-      var splitsGroup = buildToolbarGroup('Splits');
-      splitsGroup.classList.add('toolbar-group-highlight');
-      var splitsSelect = document.createElement('select');
-      splitsSelect.className = 'control';
-      splitsParamOptions.forEach(function (opt) {
-        var o = document.createElement('option');
-        o.value = String(opt.value);
-        o.textContent = opt.label;
-        splitsSelect.appendChild(o);
-      });
-      syncSplitsSelectValue(splitsSelect);
-      splitsSelect.addEventListener('change', function () {
-        var opt = splitsParamOptions[splitsSelect.selectedIndex];
-        splitsParameter.changeValueAsync(opt.value);
-      });
-      splitsGroup.appendChild(splitsSelect);
-      left.appendChild(splitsGroup);
-      toolbarEls.splitsSelect = splitsSelect;
-    }
+  // The date-range/granularity controls get their own panel (between the
+  // Filters panel and the main toolbar) so the main toolbar doesn't get
+  // overcrowded as more controls (Metrics, Export, Adjust Y-Axis) were added.
+  function buildTimeframePanel() {
+    var panel = document.createElement('div');
+    panel.className = 'toolbar';
 
     // Granularity
     var granGroup = buildToolbarGroup('Timeframe');
@@ -2243,7 +2289,7 @@
       recomputeAndRenderData();
     });
     granGroup.appendChild(granSelect);
-    left.appendChild(granGroup);
+    panel.appendChild(granGroup);
 
     // Start date
     var startField = buildDateField(state.startDate, function (value) {
@@ -2253,7 +2299,7 @@
     });
     var startGroup = buildToolbarGroup('Start Date');
     startGroup.appendChild(startField.el);
-    left.appendChild(startGroup);
+    panel.appendChild(startGroup);
     toolbarEls.startInput = startField.input;
 
     // End date
@@ -2264,7 +2310,7 @@
     });
     var endGroup = buildToolbarGroup('End Date');
     endGroup.appendChild(endField.el);
-    left.appendChild(endGroup);
+    panel.appendChild(endGroup);
     toolbarEls.endInput = endField.input;
 
     // Hide incomplete period
@@ -2286,8 +2332,43 @@
     checkboxRow.appendChild(checkbox);
     checkboxRow.appendChild(checkboxLabel);
     incompleteGroup.appendChild(checkboxRow);
-    left.appendChild(incompleteGroup);
+    panel.appendChild(incompleteGroup);
     toolbarEls.incompleteGroup = incompleteGroup;
+
+    return panel;
+  }
+
+  function buildToolbar() {
+    var toolbar = document.createElement('div');
+    toolbar.className = 'toolbar';
+
+    var left = document.createElement('div');
+    left.className = 'toolbar-left';
+
+    var right = document.createElement('div');
+    right.className = 'toolbar-right';
+
+    // Splits (Tableau Parameter — hidden entirely if the workbook doesn't
+    // have one named "Splits", or if it isn't a list-type parameter).
+    if (splitsParameter && splitsParamOptions.length > 0) {
+      var splitsGroup = buildToolbarGroup('Splits');
+      var splitsSelect = document.createElement('select');
+      splitsSelect.className = 'control';
+      splitsParamOptions.forEach(function (opt) {
+        var o = document.createElement('option');
+        o.value = String(opt.value);
+        o.textContent = opt.label;
+        splitsSelect.appendChild(o);
+      });
+      syncSplitsSelectValue(splitsSelect);
+      splitsSelect.addEventListener('change', function () {
+        var opt = splitsParamOptions[splitsSelect.selectedIndex];
+        splitsParameter.changeValueAsync(opt.value);
+      });
+      splitsGroup.appendChild(splitsSelect);
+      left.appendChild(splitsGroup);
+      toolbarEls.splitsSelect = splitsSelect;
+    }
 
     // Metrics visibility — deferred apply so toggling many checkboxes
     // doesn't re-render the grid on every click.
@@ -2308,7 +2389,12 @@
       }
     });
     metricsGroup.appendChild(metricsDropdown.el);
-    right.appendChild(metricsGroup);
+    left.appendChild(metricsGroup);
+
+    // Download
+    var downloadGroup = buildToolbarGroup('Export');
+    downloadGroup.appendChild(buildDownloadMenu());
+    left.appendChild(downloadGroup);
 
     // Adjust Y-Axis
     var axisGroup = buildToolbarGroup(' ');
@@ -2329,7 +2415,7 @@
     axisCheckboxRow.appendChild(axisCheckbox);
     axisCheckboxRow.appendChild(axisCheckboxLabel);
     axisGroup.appendChild(axisCheckboxRow);
-    right.appendChild(axisGroup);
+    left.appendChild(axisGroup);
 
     // Chart type
     var chartTypeGroup = buildToolbarGroup('Chart Type');
@@ -2359,11 +2445,6 @@
     perRowGroup.appendChild(perRowSegmented);
     right.appendChild(perRowGroup);
 
-    // Download
-    var downloadGroup = buildToolbarGroup('Export');
-    downloadGroup.appendChild(buildDownloadMenu());
-    right.appendChild(downloadGroup);
-
     toolbar.appendChild(left);
     toolbar.appendChild(right);
 
@@ -2376,6 +2457,7 @@
     filtersPanelEl.className = 'filters-panel hidden';
     appEl.appendChild(filtersPanelEl);
     if (cachedWorksheet) renderFiltersPanel(cachedWorksheet);
+    appEl.appendChild(buildTimeframePanel());
     appEl.appendChild(buildToolbar());
     legendEl = document.createElement('div');
     legendEl.className = 'legend hidden';
@@ -2530,19 +2612,26 @@
     });
   }
 
+  // Builds the new controls fully before touching the DOM at all, so the
+  // panel never flashes empty between "filter changed" and "new controls
+  // ready" — each control needs its own getDomainAsync() round trip, and
+  // clearing first (as we used to) made the whole panel disappear for that
+  // entire window on every single filter change.
   function renderFiltersPanel(worksheet) {
     if (!filtersPanelEl) return Promise.resolve();
-    filtersPanelEl.innerHTML = '';
     if (!currentFilters || currentFilters.length === 0) {
+      filtersPanelEl.innerHTML = '';
       filtersPanelEl.classList.add('hidden');
       return Promise.resolve();
     }
-    filtersPanelEl.classList.remove('hidden');
     var promises = currentFilters.map(function (filter) {
       return buildFilterControl(worksheet, filter).catch(function () { return null; });
     });
     return Promise.all(promises).then(function (groups) {
+      filtersPanelEl.innerHTML = '';
       groups.forEach(function (g) { if (g) filtersPanelEl.appendChild(g); });
+      filtersPanelEl.classList.remove('hidden');
+      equalizeControlWidths(filtersPanelEl, '.multiselect-toggle, select.control');
     });
   }
 
