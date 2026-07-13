@@ -53,6 +53,9 @@
     margin-bottom: 18px;
     box-shadow: 0 1px 2px rgba(31, 33, 82, 0.05);
   }
+  .toolbar-pack-left {
+    justify-content: flex-start;
+  }
   .toolbar-left, .toolbar-right {
     display: flex;
     flex-wrap: wrap;
@@ -1061,10 +1064,13 @@
       var p1 = pts[i];
       var p2 = pts[i + 1];
       var p3 = pts[i + 2] || p2;
-      var cp1x = p1[0] + (p2[0] - p0[0]) / 6;
-      var cp1y = p1[1] + (p2[1] - p0[1]) / 6;
-      var cp2x = p2[0] - (p3[0] - p1[0]) / 6;
-      var cp2y = p2[1] - (p3[1] - p1[1]) / 6;
+      // A larger divisor here means a shorter tangent (less smoothing) —
+      // 6 is the textbook Catmull-Rom conversion; bumping it to 9 hugs the
+      // real data more closely while still softening sharp angles.
+      var cp1x = p1[0] + (p2[0] - p0[0]) / 9;
+      var cp1y = p1[1] + (p2[1] - p0[1]) / 9;
+      var cp2x = p2[0] - (p3[0] - p1[0]) / 9;
+      var cp2y = p2[1] - (p3[1] - p1[1]) / 9;
       path += 'C' + cp1x.toFixed(2) + ',' + cp1y.toFixed(2) + ' ' +
         cp2x.toFixed(2) + ',' + cp2y.toFixed(2) + ' ' +
         p2[0].toFixed(2) + ',' + p2[1].toFixed(2) + ' ';
@@ -1130,13 +1136,15 @@
   // shared, fixed-size HTML overlay (only one card can be hovered at a
   // time) keeps the hover marker perfectly round and avoids leaking a new
   // DOM node into <body> on every re-render.
-  function positionHoverDot(dot, svg, xInViewBox, yInViewBox, color) {
+  function positionHoverDot(dot, svg, xInViewBox, yInViewBox) {
     var rect = svg.getBoundingClientRect();
     var screenX = rect.left + (xInViewBox / CHART_WIDTH) * rect.width;
     var screenY = rect.top + (yInViewBox / CHART_HEIGHT) * rect.height;
     dot.style.left = screenX.toFixed(1) + 'px';
     dot.style.top = screenY.toFixed(1) + 'px';
-    dot.style.background = color;
+    // Always the tooltip's own ink color, regardless of the series/line
+    // color it's marking — matches the tooltip box it always appears with.
+    dot.style.background = '#1F2152';
     dot.style.display = 'block';
   }
 
@@ -1243,8 +1251,7 @@
 
       var chosen = metric.series[bestSi];
       var ptX = xForIndex(idx, n, width, padX);
-      var dotColor = isSplit ? chosen.color : VIOLET;
-      positionHoverDot(hoverDotEl, svg, ptX, bestY, dotColor);
+      positionHoverDot(hoverDotEl, svg, ptX, bestY);
 
       var label = isSplit ? (chosen.label + ' — ' + metric.name) : metric.name;
       showTooltip(e.clientX, e.clientY, timeLabels[idx], label, chosen.values[idx], metric.format);
@@ -1330,8 +1337,7 @@
       var v = chosen.values[idx];
       var barY = yForValue(v, scale, height, padTop, padBottom);
       var barCenterX = groupStart + si * (barWidth + barGap) + barWidth / 2;
-      var dotColor = isSplit ? chosen.color : VIOLET;
-      positionHoverDot(hoverDotEl, svg, barCenterX, Math.min(barY, baselineY), dotColor);
+      positionHoverDot(hoverDotEl, svg, barCenterX, Math.min(barY, baselineY));
 
       var label = isSplit ? (chosen.label + ' — ' + metric.name) : metric.name;
       showTooltip(e.clientX, e.clientY, timeLabels[idx], label, v, metric.format);
@@ -1441,6 +1447,15 @@
     }
 
     card.addEventListener('dragstart', function (e) {
+      // Belt-and-suspenders: the slider row's own draggable="false" should
+      // already exclude it, but that relies on the browser respecting
+      // implicit draggable-region inheritance, which isn't reliable enough
+      // in practice — check directly at the point the card's drag actually
+      // starts, using whatever element the gesture originated from.
+      if (e.target && e.target.closest && e.target.closest('.axis-slider-row')) {
+        e.preventDefault();
+        return;
+      }
       dragSrcName = metric.name;
       card.classList.add('dragging');
       if (e.dataTransfer) {
@@ -1684,16 +1699,48 @@
     var n = lastTimeLabels.length;
     if (n <= 1) {
       gridEl.classList.toggle('labels-visible', n === 1);
-      return;
+    } else {
+      var firstCard = gridEl.querySelector('.card');
+      if (firstCard) {
+        var cardWidth = firstCard.getBoundingClientRect().width;
+        if (cardWidth) {
+          var scale = cardWidth / CHART_WIDTH;
+          var innerW = CHART_WIDTH - CHART_PAD_X * 2;
+          var pxPerPoint = (innerW / (n - 1)) * scale;
+          gridEl.classList.toggle('labels-visible', pxPerPoint >= LABEL_MIN_PX_PER_POINT);
+        }
+      }
     }
-    var firstCard = gridEl.querySelector('.card');
-    if (!firstCard) return;
-    var cardWidth = firstCard.getBoundingClientRect().width;
-    if (!cardWidth) return;
-    var scale = cardWidth / CHART_WIDTH;
-    var innerW = CHART_WIDTH - CHART_PAD_X * 2;
-    var pxPerPoint = (innerW / (n - 1)) * scale;
-    gridEl.classList.toggle('labels-visible', pxPerPoint >= LABEL_MIN_PX_PER_POINT);
+    normalizeDataLabelAspect();
+  }
+
+  // The chart SVG stretches non-uniformly (preserveAspectRatio="none"), so
+  // at a wider aspect ratio (e.g. 3 charts per row) text gets visibly
+  // stretched horizontally, same root cause as the hover-dot ellipse bug
+  // fixed earlier. Text has no non-scaling-stroke equivalent, so each label
+  // gets an inverse horizontal scale around its own anchor point to cancel
+  // the excess stretch out.
+  function normalizeDataLabelAspect() {
+    if (!gridEl) return;
+    var cards = gridEl.querySelectorAll('.card');
+    Array.prototype.forEach.call(cards, function (card) {
+      var svg = card.querySelector('svg.card-chart');
+      if (!svg) return;
+      var rect = svg.getBoundingClientRect();
+      if (!rect.width || !rect.height) return;
+      var scaleX = rect.width / CHART_WIDTH;
+      var scaleY = rect.height / CHART_HEIGHT;
+      var correction = scaleY / scaleX;
+      var labels = svg.querySelectorAll('.data-label');
+      Array.prototype.forEach.call(labels, function (label) {
+        var x = parseFloat(label.getAttribute('x'));
+        var y = parseFloat(label.getAttribute('y'));
+        label.setAttribute('transform',
+          'translate(' + x.toFixed(2) + ',' + y.toFixed(2) + ') ' +
+          'scale(' + correction.toFixed(4) + ',1) ' +
+          'translate(' + (-x).toFixed(2) + ',' + (-y).toFixed(2) + ')');
+      });
+    });
   }
 
   function updateLegend() {
@@ -1748,6 +1795,15 @@
     label.className = 'toolbar-label';
     label.textContent = labelText;
     group.appendChild(label);
+    return group;
+  }
+
+  // Dropdown-style filter controls already show their own name inside the
+  // toggle button, so the outer grey label above them is redundant — unlike
+  // range/relative-date filters, which have no such internal label.
+  function buildToolbarGroupPlain() {
+    var group = document.createElement('div');
+    group.className = 'toolbar-group';
     return group;
   }
 
@@ -2269,7 +2325,7 @@
   // overcrowded as more controls (Metrics, Export, Adjust Y-Axis) were added.
   function buildTimeframePanel() {
     var panel = document.createElement('div');
-    panel.className = 'toolbar';
+    panel.className = 'toolbar toolbar-pack-left';
 
     // Granularity
     var granGroup = buildToolbarGroup('Timeframe');
@@ -2671,7 +2727,7 @@
         ? options.map(function (o) { return o.value; })
         : filter.appliedValues.map(function (dv) { return String(dv.value); });
 
-      var group = buildToolbarGroup(stripAggregation(filter.fieldName));
+      var group = buildToolbarGroupPlain();
       var dropdown = buildMultiSelectDropdown({
         label: stripAggregation(filter.fieldName),
         options: options,
@@ -2703,7 +2759,7 @@
     // this filter type), so the checklist is always fully checked already.
     var appliedKeys = options.map(function (o) { return o.value; });
 
-    var group = buildToolbarGroup(stripAggregation(filter.fieldName));
+    var group = buildToolbarGroupPlain();
     var dropdown = buildMultiSelectDropdown({
       label: stripAggregation(filter.fieldName),
       options: options,
