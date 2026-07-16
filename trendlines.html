@@ -659,13 +659,38 @@
     margin: 0 0 6px;
     line-height: 1.5;
   }
+  .formula-dialog-scroll {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    padding-right: 2px;
+  }
+  .formula-section {
+    margin-bottom: 18px;
+  }
+  .formula-section-heading {
+    font-size: 12px;
+    font-weight: 700;
+    color: var(--ink);
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    margin: 0 0 8px;
+  }
+  .formula-general-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 14px;
+    margin-bottom: 6px;
+  }
+  .formula-currency-input {
+    width: 44px;
+    text-align: center;
+  }
   .formula-row-list {
     display: flex;
     flex-direction: column;
     gap: 10px;
-    overflow-y: auto;
     margin: 8px 0 12px;
-    padding-right: 2px;
   }
   .formula-row-card {
     border: 1px solid var(--border);
@@ -685,10 +710,43 @@
     flex: 1;
     font-weight: 600;
   }
+  .formula-expr-wrap {
+    position: relative;
+  }
   .formula-expr-input {
     width: 100%;
     box-sizing: border-box;
     font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+  .formula-autocomplete {
+    position: absolute;
+    z-index: 20;
+    top: 100%;
+    left: 0;
+    right: 0;
+    margin-top: 3px;
+    max-height: 160px;
+    overflow-y: auto;
+    background: #FFFFFF;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    box-shadow: 0 8px 24px rgba(31, 33, 82, 0.12);
+    padding: 4px;
+  }
+  .formula-autocomplete.hidden {
+    display: none;
+  }
+  .formula-autocomplete-item {
+    padding: 6px 8px;
+    border-radius: 6px;
+    font-size: 12px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    color: var(--ink);
+    cursor: pointer;
+  }
+  .formula-autocomplete-item:hover, .formula-autocomplete-item.active {
+    background: var(--tint);
+    color: var(--accent-text);
   }
   .formula-remove-btn {
     flex: none;
@@ -827,7 +885,10 @@
   ];
   var TRAILING_N = { trailing7: 7, trailing14: 14, trailing21: 21, trailing28: 28, trailing35: 35 };
   var INCOMPLETE_RELEVANT = ['weekly', 'monthly', 'quarterly', 'yearly'];
-  var WEEK_START_PARAMETER_NAME = 'Week Start Day';
+  // Sensible "recent trend" window per granularity, used by
+  // ensureDefaultDateRange when the author hasn't set an explicit default
+  // period count in Configure.
+  var DEFAULT_PERIOD_COUNT_FALLBACK = { daily: 30, weekly: 14, monthly: 6, quarterly: 4, yearly: 3 };
   var SPLITS_PARAMETER_NAME = 'Splits';
   var CHART_WIDTH = 300;
   var CHART_HEIGHT = 100;
@@ -859,6 +920,9 @@
     chartsPerRow: DEFAULT_CHARTS_PER_ROW,
     order: [],
     granularity: 'weekly',
+    // Author-configured via the Configure dialog (General Settings) —
+    // no longer sourced from a "Week Start Day" Tableau parameter, so a
+    // future project doesn't need one set up just to satisfy this.
     weekStartDay: 0,
     hideIncomplete: false,
     startDate: null,
@@ -869,9 +933,18 @@
     axisOverrides: {},
     // Author-defined calculated-metric formulas (see the "Author-defined
     // formula metrics" block above) — each entry is
-    // { outputName, expression, format, ast }. Set via the Configure
-    // dialog only; there is no viewer-facing UI for this.
-    formulaDefs: []
+    // { outputName, expression, formatType, decimals, thousands, ast }.
+    // Set via the Configure dialog only; there is no viewer-facing UI for
+    // this.
+    formulaDefs: [],
+    // Remaining Configure-dialog "General Settings" fields — all author-
+    // only, persisted separately from the viewer-adjustable settings above
+    // (see persistAuthorConfig vs saveSettings).
+    currencySymbol: '$',
+    // null means "no author default set" — ensureDefaultDateRange falls
+    // back to the hardcoded granularity/period-count defaults below.
+    defaultGranularity: null,
+    defaultPeriodCount: null
   };
 
   var rawRows = [];
@@ -1366,11 +1439,41 @@
     splitPaletteInfo = buildSplitPalette(rawRows);
   }
 
+  // First-ever load (nothing saved yet) starts on however many of the
+  // current granularity's periods the author configured in Configure ->
+  // General Settings (defaultPeriodCount), or a sensible per-granularity
+  // fallback otherwise (DEFAULT_PERIOD_COUNT_FALLBACK) — e.g. author sets
+  // Default Timeframe = Monthly + Show Last 3 Periods to open on the last
+  // 3 months. Once a viewer changes Start/End date, that's saved and this
+  // never runs again for them.
   function ensureDefaultDateRange() {
     if (state.startDate && state.endDate) return;
     var today = todayUTC();
-    var currentWeekStart = startOfWeek(today, state.weekStartDay);
-    state.startDate = state.startDate || utcToDateInputValue(addDays(currentWeekStart, -14 * 7));
+    var n = state.defaultPeriodCount || DEFAULT_PERIOD_COUNT_FALLBACK[state.granularity] || 14;
+    var startAnchor;
+    switch (state.granularity) {
+      case 'daily':
+        startAnchor = addDays(today, -(n - 1));
+        break;
+      case 'monthly':
+        startAnchor = addMonths(startOfMonth(today), -(n - 1));
+        break;
+      case 'quarterly':
+        startAnchor = addMonths(startOfQuarter(today), -(n - 1) * 3);
+        break;
+      case 'yearly':
+        startAnchor = new Date(Date.UTC(today.getUTCFullYear() - (n - 1), 0, 1));
+        break;
+      case 'weekly':
+      default:
+        // Also the safe fallback for trailingN granularities: their own
+        // bucketing computes its window from "today" independently, so
+        // this just needs to be wide enough to contain it (98 days always
+        // is, since the longest trailing option is 35 days).
+        startAnchor = addDays(startOfWeek(today, state.weekStartDay), -(n - 1) * 7);
+        break;
+    }
+    state.startDate = state.startDate || utcToDateInputValue(startAnchor);
     state.endDate = state.endDate || utcToDateInputValue(today);
   }
 
@@ -1471,7 +1574,7 @@
           })
         };
       });
-      var computed = { name: def.outputName, format: def.format, series: series };
+      var computed = { name: def.outputName, format: resolveFormulaFormat(def), series: series };
       var existingIdx = -1;
       lastMetrics.forEach(function (m, idx) { if (m.name === def.outputName) existingIdx = idx; });
       if (existingIdx !== -1) lastMetrics[existingIdx] = computed;
@@ -3139,6 +3242,37 @@
   function loadSettings() {
     try {
       var settings = tableau.extensions.settings;
+
+      // Author-only General Settings (Configure dialog) — loaded before
+      // the viewer-adjustable settings below so defaultGranularity can
+      // seed state.granularity's starting point ahead of any viewer-saved
+      // override.
+      var savedCurrencySymbol = settings.get('currencySymbol');
+      if (savedCurrencySymbol) state.currencySymbol = savedCurrencySymbol;
+
+      var savedWeekStartDay = settings.get('weekStartDay');
+      if (savedWeekStartDay !== undefined && savedWeekStartDay !== '') {
+        state.weekStartDay = parseInt(savedWeekStartDay, 10) === 1 ? 1 : 0;
+      }
+
+      var savedDefaultGranularity = settings.get('defaultGranularity');
+      if (savedDefaultGranularity) {
+        state.defaultGranularity = savedDefaultGranularity;
+        state.granularity = savedDefaultGranularity;
+      }
+
+      var savedDefaultPeriodCount = settings.get('defaultPeriodCount');
+      if (savedDefaultPeriodCount) {
+        var n = parseInt(savedDefaultPeriodCount, 10);
+        if (!isNaN(n) && n > 0) state.defaultPeriodCount = n;
+      }
+
+      var savedFormulaDefs = settings.get('formulaDefs');
+      if (savedFormulaDefs) applyFormulaDefs(JSON.parse(savedFormulaDefs));
+
+      // Viewer-adjustable settings — these override the author defaults
+      // above once a viewer has actually touched a control (same shared
+      // settings store as everything else in this file).
       var savedPerRow = parseInt(settings.get('chartsPerRow'), 10);
       if (!isNaN(savedPerRow) && savedPerRow >= MIN_CHARTS_PER_ROW && savedPerRow <= MAX_CHARTS_PER_ROW) {
         state.chartsPerRow = savedPerRow;
@@ -3169,49 +3303,64 @@
 
       var savedAxisOverrides = settings.get('axisOverrides');
       if (savedAxisOverrides) state.axisOverrides = JSON.parse(savedAxisOverrides);
-
-      var savedFormulaDefs = settings.get('formulaDefs');
-      if (savedFormulaDefs) applyFormulaDefs(JSON.parse(savedFormulaDefs));
     } catch (e) {
       // no saved settings yet; defaults stand
     }
   }
 
-  // Parses each stored { outputName, expression, format } into a render-
-  // ready state.formulaDefs entry with a parsed `ast` (null if the
-  // expression doesn't currently parse — recomputeAndRenderData skips
-  // those rather than throwing, so one bad formula can't break the rest).
-  // Also the single place format gets normalized to the {prefix, suffix,
-  // multiplier, decimals, thousands} shape formatMetricValue/
-  // formatCompactLabel expect — multiplier is always 1 here since, unlike
-  // Tableau's own auto-detected formats, the formula itself already
-  // produces the exact number to display (any scaling belongs in the
-  // expression, e.g. "* 100" for a percentage).
+  // Turns a formula's General-Settings-dependent formatType into the
+  // concrete {prefix, suffix, multiplier, decimals, thousands} shape
+  // formatMetricValue/formatCompactLabel expect. Resolved fresh at
+  // render time (not cached on the def) so changing the global Currency
+  // Symbol immediately re-applies to every currency-formatted formula
+  // without needing to re-save each one individually.
+  function resolveFormulaFormat(def) {
+    var decimals = def.decimals !== undefined && def.decimals !== null ? def.decimals : 2;
+    var thousands = !!def.thousands;
+    if (def.formatType === 'currency') {
+      return { prefix: state.currencySymbol || '$', suffix: '', multiplier: 1, decimals: decimals, thousands: thousands };
+    }
+    if (def.formatType === 'percentage') {
+      // Multiplier 100 here (unlike the old prefix/suffix model) means the
+      // formula itself should stay a plain ratio, e.g. [Conversions] /
+      // [Clicks] — Percentage format does the *100 and the % automatically.
+      return { prefix: '', suffix: '%', multiplier: 100, decimals: decimals, thousands: thousands };
+    }
+    return { prefix: '', suffix: '', multiplier: 1, decimals: decimals, thousands: thousands };
+  }
+
+  // Parses each stored { outputName, expression, formatType, decimals,
+  // thousands } into a render-ready state.formulaDefs entry with a parsed
+  // `ast` (null if the expression doesn't currently parse —
+  // recomputeAndRenderData skips those rather than throwing, so one bad
+  // formula can't break the rest).
   function applyFormulaDefs(rawDefs) {
     state.formulaDefs = (rawDefs || []).map(function (def) {
       var parsed = parseFormulaExpression(def.expression);
-      var f = def.format || {};
       return {
         outputName: def.outputName,
         expression: def.expression,
-        format: {
-          prefix: f.prefix || '',
-          suffix: f.suffix || '',
-          multiplier: 1,
-          decimals: f.decimals !== undefined && f.decimals !== null ? f.decimals : 2,
-          thousands: !!f.thousands
-        },
+        formatType: def.formatType === 'currency' || def.formatType === 'percentage' ? def.formatType : 'numeric',
+        decimals: def.decimals !== undefined && def.decimals !== null ? def.decimals : 2,
+        thousands: !!def.thousands,
         ast: parsed.ast
       };
     });
   }
 
-  function persistFormulaDefs() {
+  // Persists every Configure-dialog "General Settings" field alongside the
+  // formula defs — all author-only, distinct from the viewer-adjustable
+  // saveSettings() below.
+  function persistAuthorConfig() {
     try {
       var settings = tableau.extensions.settings;
       settings.set('formulaDefs', JSON.stringify(state.formulaDefs.map(function (d) {
-        return { outputName: d.outputName, expression: d.expression, format: d.format };
+        return { outputName: d.outputName, expression: d.expression, formatType: d.formatType, decimals: d.decimals, thousands: d.thousands };
       })));
+      settings.set('currencySymbol', state.currencySymbol);
+      settings.set('weekStartDay', String(state.weekStartDay));
+      settings.set('defaultGranularity', state.defaultGranularity || '');
+      settings.set('defaultPeriodCount', state.defaultPeriodCount ? String(state.defaultPeriodCount) : '');
       settings.saveAsync();
     } catch (e) {
       // ignore persistence failures
@@ -3237,28 +3386,6 @@
     }
   }
 
-  // Week Start Day isn't shown in the extension UI; it's sourced from a
-  // Tableau parameter of the same name (string value "Sunday" or "Monday"),
-  // matching the parameter the user's own DATETRUNC/DATEDIFF calc already
-  // references. Manifest encodings can't bind parameters, so this is done
-  // via findParameterAsync instead of a marks-card slot.
-  function applyWeekStartValue(rawValue) {
-    var v = (rawValue || '').toString().trim().toLowerCase();
-    state.weekStartDay = v === 'monday' ? 1 : 0;
-  }
-
-  function loadWeekStartParameter(worksheet) {
-    return worksheet.findParameterAsync(WEEK_START_PARAMETER_NAME).then(function (param) {
-      if (!param) return;
-      applyWeekStartValue(param.currentValue.value);
-      param.addEventListener(tableau.TableauEventType.ParameterChanged, function () {
-        applyWeekStartValue(param.currentValue.value);
-        recomputeAndRenderData();
-      });
-    }).catch(function () {
-      // Parameter not found in this workbook; default to Sunday.
-    });
-  }
 
   // "Splits" is a Tableau Parameter (typically driving a calculated field
   // that feeds the "Splits" marks-card encoding) rather than a field itself,
@@ -3604,15 +3731,23 @@
   function openFormulaConfigDialog() {
     var payload = JSON.stringify({
       formulaDefs: state.formulaDefs.map(function (d) {
-        return { outputName: d.outputName, expression: d.expression, format: d.format };
+        return { outputName: d.outputName, expression: d.expression, formatType: d.formatType, decimals: d.decimals, thousands: d.thousands };
       }),
-      availableMetricNames: metricColumns.map(function (mc) { return mc.name; })
+      availableMetricNames: metricColumns.map(function (mc) { return mc.name; }),
+      currencySymbol: state.currencySymbol,
+      weekStartDay: state.weekStartDay,
+      defaultGranularity: state.defaultGranularity,
+      defaultPeriodCount: state.defaultPeriodCount
     });
     var popupUrl = location.origin + location.pathname + '?dialog=formulas';
     tableau.extensions.ui.displayDialogAsync(popupUrl, payload, { height: 640, width: 560 }).then(function (closePayload) {
       var result = JSON.parse(closePayload);
       applyFormulaDefs(result.formulaDefs);
-      persistFormulaDefs();
+      state.currencySymbol = result.currencySymbol || '$';
+      state.weekStartDay = result.weekStartDay === 1 ? 1 : 0;
+      state.defaultGranularity = result.defaultGranularity || null;
+      state.defaultPeriodCount = result.defaultPeriodCount || null;
+      persistAuthorConfig();
       recomputeAndRenderData();
     }).catch(function (error) {
       // DialogClosedByUser just means they hit the window's own close
@@ -3633,20 +3768,35 @@
     tableau.extensions.initializeDialogAsync().then(function (openPayload) {
       var initial = {};
       try { initial = JSON.parse(openPayload || '{}'); } catch (e) { /* malformed payload — start blank */ }
-      renderFormulaDialogUI(initial.formulaDefs || [], initial.availableMetricNames || []);
+      renderFormulaDialogUI(initial);
     });
   }
 
-  function renderFormulaDialogUI(initialDefs, availableNames) {
+  function renderFormulaDialogUI(initial) {
+    var availableNames = initial.availableMetricNames || [];
+    var initialDefs = initial.formulaDefs || [];
+    var initialGeneral = {
+      currencySymbol: initial.currencySymbol || '$',
+      weekStartDay: initial.weekStartDay === 1 ? 1 : 0,
+      defaultGranularity: initial.defaultGranularity || 'weekly',
+      defaultPeriodCount: initial.defaultPeriodCount || ''
+    };
+    // Mutable working copy the General Settings fields write into directly;
+    // Save reads from this, Cancel just never looks at it.
+    var general = {
+      currencySymbol: initialGeneral.currencySymbol,
+      weekStartDay: initialGeneral.weekStartDay,
+      defaultGranularity: initialGeneral.defaultGranularity,
+      defaultPeriodCount: initialGeneral.defaultPeriodCount
+    };
+
     var rows = initialDefs.map(function (d) {
-      var fmt = d.format || {};
       return {
         outputName: d.outputName || '',
         expression: d.expression || '',
-        prefix: fmt.prefix || '',
-        suffix: fmt.suffix || '',
-        decimals: fmt.decimals !== undefined && fmt.decimals !== null ? fmt.decimals : 2,
-        thousands: !!fmt.thousands
+        formatType: d.formatType === 'currency' || d.formatType === 'percentage' ? d.formatType : 'numeric',
+        decimals: d.decimals !== undefined && d.decimals !== null ? d.decimals : 2,
+        thousands: !!d.thousands
       };
     });
 
@@ -3655,35 +3805,115 @@
 
     var heading = document.createElement('h2');
     heading.className = 'formula-dialog-title';
-    heading.textContent = 'Calculated Metric Formulas';
+    heading.textContent = 'Configure Trendlines';
     wrap.appendChild(heading);
+
+    var scrollArea = document.createElement('div');
+    scrollArea.className = 'formula-dialog-scroll';
+    wrap.appendChild(scrollArea);
+
+    // --- General Settings ---------------------------------------------
+    var generalSection = document.createElement('div');
+    generalSection.className = 'formula-section';
+    var generalHeading = document.createElement('h3');
+    generalHeading.className = 'formula-section-heading';
+    generalHeading.textContent = 'General Settings';
+    generalSection.appendChild(generalHeading);
+
+    var generalRow = document.createElement('div');
+    generalRow.className = 'formula-general-row';
+
+    function labeledField(labelText, inputEl) {
+      var f = document.createElement('label');
+      f.className = 'formula-format-field';
+      var lbl = document.createElement('span');
+      lbl.textContent = labelText;
+      f.appendChild(lbl);
+      f.appendChild(inputEl);
+      return f;
+    }
+
+    var currencyInput = document.createElement('input');
+    currencyInput.type = 'text';
+    currencyInput.className = 'control formula-format-input formula-currency-input';
+    currencyInput.value = general.currencySymbol;
+    currencyInput.maxLength = 3;
+    currencyInput.addEventListener('input', function () { general.currencySymbol = currencyInput.value; });
+    generalRow.appendChild(labeledField('Currency Symbol', currencyInput));
+
+    var weekStartSelect = document.createElement('select');
+    weekStartSelect.className = 'control';
+    [[0, 'Sunday'], [1, 'Monday']].forEach(function (pair) {
+      var o = document.createElement('option');
+      o.value = String(pair[0]);
+      o.textContent = pair[1];
+      if (general.weekStartDay === pair[0]) o.selected = true;
+      weekStartSelect.appendChild(o);
+    });
+    weekStartSelect.addEventListener('change', function () { general.weekStartDay = parseInt(weekStartSelect.value, 10); });
+    generalRow.appendChild(labeledField('Week Start Day', weekStartSelect));
+
+    var defaultGranSelect = document.createElement('select');
+    defaultGranSelect.className = 'control';
+    GRANULARITY_OPTIONS.forEach(function (opt) {
+      var o = document.createElement('option');
+      o.value = opt.value;
+      o.textContent = opt.label;
+      if (general.defaultGranularity === opt.value) o.selected = true;
+      defaultGranSelect.appendChild(o);
+    });
+    defaultGranSelect.addEventListener('change', function () { general.defaultGranularity = defaultGranSelect.value; });
+    generalRow.appendChild(labeledField('Default Timeframe', defaultGranSelect));
+
+    var periodCountInput = document.createElement('input');
+    periodCountInput.type = 'number';
+    periodCountInput.min = '1';
+    periodCountInput.className = 'control formula-format-input';
+    periodCountInput.placeholder = 'auto';
+    periodCountInput.value = general.defaultPeriodCount;
+    periodCountInput.addEventListener('input', function () { general.defaultPeriodCount = periodCountInput.value; });
+    generalRow.appendChild(labeledField('Show Last N Periods', periodCountInput));
+
+    generalSection.appendChild(generalRow);
+    var generalHint = document.createElement('p');
+    generalHint.className = 'formula-dialog-hint';
+    generalHint.textContent = 'These are just starting defaults — viewers can still change Timeframe and the date range themselves.';
+    generalSection.appendChild(generalHint);
+    scrollArea.appendChild(generalSection);
+
+    // --- Calculated Metric Formulas -------------------------------------
+    var formulaSection = document.createElement('div');
+    formulaSection.className = 'formula-section';
+    var formulaHeading = document.createElement('h3');
+    formulaHeading.className = 'formula-section-heading';
+    formulaHeading.textContent = 'Calculated Metric Formulas';
+    formulaSection.appendChild(formulaHeading);
 
     var hint = document.createElement('p');
     hint.className = 'formula-dialog-hint';
-    hint.textContent = availableNames.length
-      ? 'Reference other metrics with brackets, e.g. [Cost] / [Impressions] * 1000. Available: ' +
-        availableNames.map(function (n) { return '[' + n + ']'; }).join(', ')
-      : 'Reference other metrics with brackets, e.g. [Cost] / [Impressions] * 1000.';
-    wrap.appendChild(hint);
+    hint.textContent = 'Type @ then a few letters to insert a metric reference (e.g. @Total). ' +
+      'Percentage format automatically multiplies by 100 and adds % — write plain ratios like [Conversions] / [Clicks], no need to multiply yourself.';
+    formulaSection.appendChild(hint);
 
     var note = document.createElement('p');
     note.className = 'formula-dialog-hint';
     note.textContent = 'If the metric name matches an existing one, this replaces how it’s calculated. A new name adds a new metric card.';
-    wrap.appendChild(note);
+    formulaSection.appendChild(note);
 
     var listEl = document.createElement('div');
     listEl.className = 'formula-row-list';
-    wrap.appendChild(listEl);
+    formulaSection.appendChild(listEl);
 
     var addBtn = document.createElement('button');
     addBtn.type = 'button';
     addBtn.className = 'formula-add-btn';
     addBtn.textContent = '+ Add Formula';
     addBtn.addEventListener('click', function () {
-      rows.push({ outputName: '', expression: '', prefix: '', suffix: '', decimals: 2, thousands: false });
+      rows.push({ outputName: '', expression: '', formatType: 'numeric', decimals: 2, thousands: false });
       renderRows();
     });
-    wrap.appendChild(addBtn);
+    formulaSection.appendChild(addBtn);
+    scrollArea.appendChild(formulaSection);
 
     var actions = document.createElement('div');
     actions.className = 'formula-dialog-actions';
@@ -3692,28 +3922,37 @@
     cancelBtn.className = 'formula-cancel-btn';
     cancelBtn.textContent = 'Cancel';
     cancelBtn.addEventListener('click', function () {
-      tableau.extensions.ui.closeDialog(JSON.stringify({ formulaDefs: initialDefs }));
+      tableau.extensions.ui.closeDialog(JSON.stringify({
+        formulaDefs: initialDefs,
+        currencySymbol: initialGeneral.currencySymbol,
+        weekStartDay: initialGeneral.weekStartDay,
+        defaultGranularity: initialGeneral.defaultGranularity,
+        defaultPeriodCount: initialGeneral.defaultPeriodCount || null
+      }));
     });
     var saveBtn = document.createElement('button');
     saveBtn.type = 'button';
     saveBtn.className = 'formula-save-btn';
     saveBtn.textContent = 'Save';
     saveBtn.addEventListener('click', function () {
-      var payload = rows
+      var formulaPayload = rows
         .filter(function (r) { return r.outputName.trim() && r.expression.trim(); })
         .map(function (r) {
           return {
             outputName: r.outputName.trim(),
             expression: r.expression.trim(),
-            format: {
-              prefix: r.prefix,
-              suffix: r.suffix,
-              decimals: Math.max(0, parseInt(r.decimals, 10) || 0),
-              thousands: !!r.thousands
-            }
+            formatType: r.formatType,
+            decimals: Math.max(0, parseInt(r.decimals, 10) || 0),
+            thousands: !!r.thousands
           };
         });
-      tableau.extensions.ui.closeDialog(JSON.stringify({ formulaDefs: payload }));
+      tableau.extensions.ui.closeDialog(JSON.stringify({
+        formulaDefs: formulaPayload,
+        currencySymbol: general.currencySymbol || '$',
+        weekStartDay: general.weekStartDay,
+        defaultGranularity: general.defaultGranularity,
+        defaultPeriodCount: parseInt(general.defaultPeriodCount, 10) || null
+      }));
     });
     actions.appendChild(cancelBtn);
     actions.appendChild(saveBtn);
@@ -3726,16 +3965,6 @@
       rows.forEach(function (row, idx) {
         listEl.appendChild(buildFormulaRow(row, idx));
       });
-    }
-
-    function fmtField(labelText, inputEl) {
-      var f = document.createElement('label');
-      f.className = 'formula-format-field';
-      var lbl = document.createElement('span');
-      lbl.textContent = labelText;
-      f.appendChild(lbl);
-      f.appendChild(inputEl);
-      return f;
     }
 
     function buildFormulaRow(row, idx) {
@@ -3765,12 +3994,22 @@
       topLine.appendChild(removeBtn);
       card.appendChild(topLine);
 
+      // Wrapped so the @-mention suggestion list can anchor directly below
+      // the expression input regardless of what else is in the card.
+      var exprWrap = document.createElement('div');
+      exprWrap.className = 'formula-expr-wrap';
+
       var exprInput = document.createElement('input');
       exprInput.type = 'text';
       exprInput.className = 'control formula-expr-input';
-      exprInput.placeholder = '[Cost] / [Impressions] * 1000';
+      exprInput.placeholder = 'Type @ to insert a metric, e.g. @Cost / @Impressions * 1000';
       exprInput.value = row.expression;
-      card.appendChild(exprInput);
+      exprWrap.appendChild(exprInput);
+
+      var acEl = document.createElement('div');
+      acEl.className = 'formula-autocomplete hidden';
+      exprWrap.appendChild(acEl);
+      card.appendChild(exprWrap);
 
       var errorEl = document.createElement('div');
       errorEl.className = 'formula-error';
@@ -3790,25 +4029,118 @@
           ? 'Unknown metric: ' + unknown.map(function (n) { return '[' + n + ']'; }).join(', ')
           : '';
       }
-      exprInput.addEventListener('input', validate);
+
+      // --- @mention autocomplete ---------------------------------------
+      var acMatches = [];
+      var acIndex = -1;
+
+      // Finds an in-progress "@partial" ending exactly at the cursor, e.g.
+      // typing "[Cost] / @Tot|" (| = cursor) matches query "Tot" spanning
+      // from the "@" up to the cursor; anything that would end a metric
+      // name (an operator, a space-then-more-typing... actually spaces ARE
+      // allowed since names like "Active Users" have them) breaks the
+      // match once a genuinely non-name character (operator/paren/bracket)
+      // appears between the "@" and the cursor.
+      function getMention() {
+        var pos = exprInput.selectionStart;
+        var head = exprInput.value.slice(0, pos);
+        var m = /@([A-Za-z0-9 _-]*)$/.exec(head);
+        if (!m) return null;
+        return { query: m[1], start: pos - m[0].length, end: pos };
+      }
+
+      function closeAutocomplete() {
+        acMatches = [];
+        acIndex = -1;
+        acEl.classList.add('hidden');
+        acEl.innerHTML = '';
+      }
+
+      function renderAutocomplete() {
+        acEl.innerHTML = '';
+        acEl.classList.remove('hidden');
+        acMatches.forEach(function (name, i) {
+          var item = document.createElement('div');
+          item.className = 'formula-autocomplete-item' + (i === acIndex ? ' active' : '');
+          item.textContent = name;
+          // mousedown (not click) fires before the input's blur, so focus
+          // never actually leaves the field and the caret position we
+          // need to insert at is still intact.
+          item.addEventListener('mousedown', function (e) {
+            e.preventDefault();
+            var mention = getMention();
+            if (mention) insertMention(mention, name);
+          });
+          acEl.appendChild(item);
+        });
+      }
+
+      function insertMention(mention, name) {
+        var before = exprInput.value.slice(0, mention.start);
+        var after = exprInput.value.slice(mention.end);
+        var insertion = '[' + name + ']';
+        exprInput.value = before + insertion + after;
+        var newPos = (before + insertion).length;
+        exprInput.setSelectionRange(newPos, newPos);
+        closeAutocomplete();
+        validate();
+        exprInput.focus();
+      }
+
+      function updateAutocomplete() {
+        var mention = getMention();
+        if (!mention) { closeAutocomplete(); return; }
+        var q = mention.query.trim().toLowerCase();
+        acMatches = availableNames.filter(function (n) {
+          return q === '' || n.toLowerCase().indexOf(q) === 0;
+        });
+        if (acMatches.length === 0) { closeAutocomplete(); return; }
+        acIndex = 0;
+        renderAutocomplete();
+      }
+
+      exprInput.addEventListener('input', function () {
+        validate();
+        updateAutocomplete();
+      });
+      exprInput.addEventListener('keydown', function (e) {
+        if (acEl.classList.contains('hidden')) return;
+        if (e.key === 'ArrowDown') {
+          e.preventDefault();
+          acIndex = Math.min(acMatches.length - 1, acIndex + 1);
+          renderAutocomplete();
+        } else if (e.key === 'ArrowUp') {
+          e.preventDefault();
+          acIndex = Math.max(0, acIndex - 1);
+          renderAutocomplete();
+        } else if (e.key === 'Enter') {
+          e.preventDefault();
+          var mention = getMention();
+          if (mention && acMatches[acIndex]) insertMention(mention, acMatches[acIndex]);
+        } else if (e.key === 'Escape') {
+          closeAutocomplete();
+        }
+      });
+      // Deferred so a suggestion's mousedown (which runs first) can still
+      // read/act on the field before the list disappears.
+      exprInput.addEventListener('blur', function () { setTimeout(closeAutocomplete, 150); });
+
       validate();
 
       var fmtRow = document.createElement('div');
       fmtRow.className = 'formula-format-row';
 
-      var prefixInput = document.createElement('input');
-      prefixInput.type = 'text';
-      prefixInput.className = 'control formula-format-input';
-      prefixInput.value = row.prefix;
-      prefixInput.addEventListener('input', function () { row.prefix = prefixInput.value; });
-      fmtRow.appendChild(fmtField('Prefix', prefixInput));
-
-      var suffixInput = document.createElement('input');
-      suffixInput.type = 'text';
-      suffixInput.className = 'control formula-format-input';
-      suffixInput.value = row.suffix;
-      suffixInput.addEventListener('input', function () { row.suffix = suffixInput.value; });
-      fmtRow.appendChild(fmtField('Suffix', suffixInput));
+      var formatSelect = document.createElement('select');
+      formatSelect.className = 'control formula-format-select';
+      [['numeric', 'Numeric'], ['currency', 'Currency'], ['percentage', 'Percentage']].forEach(function (pair) {
+        var o = document.createElement('option');
+        o.value = pair[0];
+        o.textContent = pair[1];
+        if (row.formatType === pair[0]) o.selected = true;
+        formatSelect.appendChild(o);
+      });
+      formatSelect.addEventListener('change', function () { row.formatType = formatSelect.value; });
+      fmtRow.appendChild(labeledField('Format', formatSelect));
 
       var decimalsInput = document.createElement('input');
       decimalsInput.type = 'number';
@@ -3817,7 +4149,7 @@
       decimalsInput.className = 'control formula-format-input';
       decimalsInput.value = String(row.decimals);
       decimalsInput.addEventListener('input', function () { row.decimals = decimalsInput.value; });
-      fmtRow.appendChild(fmtField('Decimals', decimalsInput));
+      fmtRow.appendChild(labeledField('Decimals', decimalsInput));
 
       var thousandsWrap = document.createElement('label');
       thousandsWrap.className = 'formula-format-field formula-thousands-field';
@@ -3868,7 +4200,6 @@
 
       loadSettings();
       Promise.all([
-        loadWeekStartParameter(worksheet),
         loadSplitsParameter(worksheet),
         loadFilters(worksheet)
       ]).then(function () {
