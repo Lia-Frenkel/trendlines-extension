@@ -117,14 +117,23 @@
   }
   .date-field .date-display {
     position: absolute;
-    inset: 0;
+    top: 0;
+    left: 0;
+    /* Stops short of the input's own right edge so the native calendar
+       icon (and its guaranteed-to-work native click behavior, unlike our
+       showPicker() enhancement below) stays visible and clickable — only
+       the text portion needs covering, to hide the native focused-segment
+       highlight that used to show through underneath our own text. */
+    right: 22px;
+    bottom: 0;
     box-sizing: border-box;
     display: flex;
     align-items: center;
     padding-left: 10px;
     background: var(--card-bg);
     border: 1px solid var(--border);
-    border-radius: 8px;
+    border-right: none;
+    border-radius: 8px 0 0 8px;
     font-size: 13px;
     color: var(--ink);
     white-space: nowrap;
@@ -713,6 +722,36 @@
     return m ? m[1] : name;
   }
 
+  // Tableau's pill name prefixes every measure with its aggregation —
+  // SUM(Cost), CNT(Orders) — except for a calculated field whose formula
+  // already embeds its own aggregation (e.g. SUM([Cost])/SUM([Impressions])
+  // for a CPM calc), which Tableau can't decompose further and shows as
+  // AGG(CPM) instead. SUM/CNT are additive across a re-bucketed time range
+  // (a week's total is just its days' totals added up), but AGG — and any
+  // other non-additive aggregation like AVG/MEDIAN/MIN/MAX — is not: the
+  // per-day value is already a ratio or statistic, and summing several
+  // days' ratios together is mathematically meaningless (that's why
+  // switching from Daily to Weekly/Monthly used to blow calculated metrics
+  // like CPM/CPC/CTR/CVR wildly out of proportion while additive metrics
+  // stayed correct). See ADDITIVE_AGGREGATIONS below.
+  function detectAggregationPrefix(name) {
+    var m = /^([A-Za-z_][A-Za-z0-9_]*)\(/.exec(name);
+    return m ? m[1].toUpperCase() : null;
+  }
+
+  var ADDITIVE_AGGREGATIONS = { SUM: true, CNT: true, COUNT: true };
+
+  // True if a metric's per-row values can simply be added together when
+  // collapsing multiple rows into one coarser time bucket. False means the
+  // per-row value is already a ratio/statistic (AGG, AVG, MEDIAN, MIN, MAX,
+  // CNTD, ...) — for those we re-bucket with a mean instead, which isn't
+  // mathematically exact either (a true fix needs the calc's own numerator
+  // and denominator, which Tableau doesn't expose to extensions) but is far
+  // closer than summing a handful of unrelated ratios ever could be.
+  function isAdditiveMetric(mc) {
+    return !mc.agg || !!ADDITIVE_AGGREGATIONS[mc.agg];
+  }
+
   // Reverse-engineers a metric's Tableau number format (currency symbol, %,
   // decimals, thousands separator) by comparing a raw value against its
   // formattedValue, so bucketed sums render with the same formatting the
@@ -726,8 +765,19 @@
     var suffix = match[3] || '';
     var parsedNum = parseFloat(numPart.replace(/,/g, ''));
     if (isNaN(parsedNum)) return null;
-    var multiplier = parsedNum / rawValue;
-    if (!isFinite(multiplier)) return null;
+    var rawMultiplier = parsedNum / rawValue;
+    if (!isFinite(rawMultiplier) || rawMultiplier === 0) return null;
+    // Tableau's own display multiplier is always a clean power of 10 (1 for
+    // plain/currency, 100 for percentages) — but formattedValue is itself
+    // already rounded to its own decimal places, so deriving the multiplier
+    // from a single sample (parsedNum / rawValue) picks up that rounding as
+    // tiny multiplicative noise (e.g. 1.0000024 instead of 1). Left
+    // uncorrected, every displayed value — including bucketed sums — gets
+    // scaled by that noise, which is exactly the "close but not matching
+    // after the decimal" discrepancy on larger currency totals. Snapping to
+    // the nearest power of 10 removes the noise while still correctly
+    // handling true percentage scaling.
+    var multiplier = Math.sign(rawMultiplier) * Math.pow(10, Math.round(Math.log10(Math.abs(rawMultiplier))));
     var decimalMatch = /\.([0-9]+)$/.exec(numPart);
     return {
       prefix: prefix,
@@ -939,7 +989,8 @@
     var columns = dataTable.columns;
 
     metricColumns = picked.metricIndexes.map(function (colIndex) {
-      return { index: colIndex, name: stripAggregation(columns[colIndex].fieldName), format: null };
+      var fieldName = columns[colIndex].fieldName;
+      return { index: colIndex, name: stripAggregation(fieldName), agg: detectAggregationPrefix(fieldName), format: null };
     });
 
     var formatSamples = metricColumns.map(function () { return null; });
@@ -1033,6 +1084,7 @@
     lastSplitLegend = legendEntries;
 
     lastMetrics = metricColumns.map(function (mc, i) {
+      var additive = isAdditiveMetric(mc);
       var series = seriesKeys.map(function (sk, si) {
         var entry = legendEntries ? legendEntries[si] : null;
         return {
@@ -1040,10 +1092,15 @@
           label: entry ? entry.label : null,
           color: entry ? entry.color : null,
           // Null-as-zero: a bucket with no contributing rows for this series
-          // displays as 0 rather than leaving a gap.
+          // displays as 0 rather than leaving a gap. A SUM/CNT metric's
+          // bucket total is the sum of its rows; anything else (AGG, AVG,
+          // MEDIAN, MIN, MAX, ...) is already a per-row ratio/statistic, so
+          // collapsing several rows into one coarser bucket means averaging
+          // them rather than adding them up — see isAdditiveMetric above.
           values: bucketList.map(function (b) {
             var s = b.series[sk];
-            return s.counts[i] > 0 ? s.sums[i] : 0;
+            if (s.counts[i] === 0) return 0;
+            return additive ? s.sums[i] : s.sums[i] / s.counts[i];
           })
         };
       });
