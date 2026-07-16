@@ -45,7 +45,9 @@
     flex-wrap: wrap;
     align-items: flex-end;
     justify-content: space-between;
-    gap: 14px 24px;
+    /* Matches .filters-panel / .toolbar-left / .toolbar-right so the gap
+       before a trailing checkbox looks the same in every block. */
+    gap: 14px 20px;
     background: var(--card-bg);
     border: 1px solid var(--border);
     border-radius: var(--radius);
@@ -182,7 +184,7 @@
     box-sizing: border-box;
     position: relative;
     border-radius: var(--radius);
-    padding: 14px 14px 10px 14px;
+    padding: 28px 28px 20px 28px;
     background: var(--card-bg);
     border: 1px solid var(--border);
     box-shadow: 0 1px 2px rgba(31, 33, 82, 0.05);
@@ -1830,18 +1832,29 @@
 
   // Makes a set of controls (dropdown toggles, selects) share the width of
   // the widest one, so a row of filters/metrics/etc. lines up instead of
-  // each hugging its own content width.
-  function equalizeControlWidths(container, selector) {
-    var els = container.querySelectorAll(selector);
+  // each hugging its own content width. excludeSelector lets a caller opt
+  // out elements that intentionally stay compact (e.g. the relative-date
+  // filter's inline Days/Last N/N-value row).
+  function equalizeControlWidths(container, selector, excludeSelector) {
+    var els = Array.prototype.filter.call(container.querySelectorAll(selector), function (el) {
+      return !excludeSelector || !el.closest(excludeSelector);
+    });
     if (els.length < 2) return;
-    Array.prototype.forEach.call(els, function (el) { el.style.width = ''; });
+    els.forEach(function (el) { el.style.width = ''; });
     var maxWidth = 0;
-    Array.prototype.forEach.call(els, function (el) {
+    els.forEach(function (el) {
       maxWidth = Math.max(maxWidth, el.getBoundingClientRect().width);
     });
-    Array.prototype.forEach.call(els, function (el) {
+    els.forEach(function (el) {
       el.style.width = Math.ceil(maxWidth) + 'px';
     });
+  }
+
+  // Unifies every dropdown-style control app-wide (filters panel, Timeframe
+  // panel, main toolbar) to one shared width, so the same kind of element
+  // looks identical no matter which block it lives in.
+  function equalizeAllDropdowns() {
+    equalizeControlWidths(appEl, '.multiselect-toggle, select.control', '.relative-date-row');
   }
 
   function buildToolbarGroup(labelText) {
@@ -1880,15 +1893,37 @@
     var display = document.createElement('span');
     display.className = 'date-display';
     display.textContent = formatDateDisplayValue(initialValue);
-    // The overlay now owns the click: it fully covers the native input (so
-    // its focused-segment highlight never shows through underneath our
-    // text) and opens the picker itself on any click, rather than relying
-    // on the native input's own "only the tiny icon opens the calendar"
-    // behavior.
+    // The overlay owns the click: it fully covers the native input (so its
+    // focused-segment highlight never shows through underneath our text)
+    // and opens the picker itself on any click, rather than relying on the
+    // native input's own "only the tiny icon opens the calendar" behavior.
+    // showPicker() can be blocked in restricted embed contexts (observed in
+    // Tableau Online's sandboxed iframe — desktop worked fine) without
+    // necessarily throwing synchronously, so on the very first click, also
+    // verify the picker actually opened. If it didn't, this environment
+    // can't do the full-box picker at all, so stop capturing clicks here
+    // from then on and let them fall straight through to the native input —
+    // that at least restores the native "click the little icon" behavior
+    // instead of a dead control.
+    var pickerConfirmed = false;
     display.addEventListener('click', function () {
-      if (input.showPicker) {
-        try { input.showPicker(); } catch (e) { input.focus(); }
-      } else {
+      if (!input.showPicker) {
+        display.style.pointerEvents = 'none';
+        input.focus();
+        return;
+      }
+      try {
+        input.showPicker();
+        if (!pickerConfirmed) {
+          pickerConfirmed = true;
+          setTimeout(function () {
+            if (!document.activeElement || document.activeElement !== input) {
+              display.style.pointerEvents = 'none';
+            }
+          }, 250);
+        }
+      } catch (e) {
+        display.style.pointerEvents = 'none';
         input.focus();
       }
     });
@@ -2650,6 +2685,13 @@
       document.body.appendChild(hoverDotEl);
     }
     appBuilt = true;
+    // Safety net for the no-filters case: renderFiltersPanel's own call
+    // (above) runs before the Timeframe/toolbar selects below even exist
+    // when there are filters to build (their Promise.all resolution is
+    // always deferred past the rest of this synchronous function), but
+    // when there are zero filters it returns synchronously right away —
+    // too early to see those selects, so equalize once more here.
+    equalizeAllDropdowns();
   }
 
   function loadSettings() {
@@ -2796,6 +2838,7 @@
     if (!currentFilters || currentFilters.length === 0) {
       filtersPanelEl.innerHTML = '';
       filtersPanelEl.classList.add('hidden');
+      equalizeAllDropdowns();
       return Promise.resolve();
     }
     var promises = currentFilters.map(function (filter) {
@@ -2805,7 +2848,7 @@
       filtersPanelEl.innerHTML = '';
       groups.forEach(function (g) { if (g) filtersPanelEl.appendChild(g); });
       filtersPanelEl.classList.remove('hidden');
-      equalizeControlWidths(filtersPanelEl, '.multiselect-toggle, select.control');
+      equalizeAllDropdowns();
     });
   }
 
