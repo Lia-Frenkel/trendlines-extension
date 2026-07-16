@@ -115,16 +115,25 @@
   .date-field input[type="date"] {
     color: transparent;
   }
+  /* The native icon's own rendered width varies by browser/OS (it clipped
+     against our fixed reserved gap in some environments), so instead of
+     sizing around it, hide it visually but keep it in place and clickable
+     — our own icon (.date-field-icon, pointer-events: none) sits on top
+     purely for a consistent look, and clicks pass through to this real,
+     always-correctly-hit-tested native control underneath. */
+  .date-field input[type="date"]::-webkit-calendar-picker-indicator {
+    opacity: 0;
+    cursor: pointer;
+  }
   .date-field .date-display {
     position: absolute;
     top: 0;
     left: 0;
-    /* Stops short of the input's own right edge so the native calendar
-       icon (and its guaranteed-to-work native click behavior, unlike our
-       showPicker() enhancement below) stays visible and clickable — only
+    /* Stops short of the input's own right edge, leaving room for the
+       icon (native hitbox underneath, our own icon drawn on top) — only
        the text portion needs covering, to hide the native focused-segment
        highlight that used to show through underneath our own text. */
-    right: 22px;
+    right: 26px;
     bottom: 0;
     box-sizing: border-box;
     display: flex;
@@ -138,6 +147,18 @@
     color: var(--ink);
     white-space: nowrap;
     cursor: pointer;
+  }
+  .date-field-icon {
+    position: absolute;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    width: 26px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--muted);
+    pointer-events: none;
   }
   .checkbox-row {
     display: flex;
@@ -613,6 +634,161 @@
   .relative-date-row input[type="number"] {
     width: 56px;
   }
+
+  /* Configure dialog (editor-only formula editor) — see openFormulaConfigDialog
+     / initFormulaDialog in the script. Reuses .control etc. from above. */
+  #app.formula-dialog {
+    padding: 20px;
+  }
+  .formula-dialog-wrap {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    height: 100%;
+    box-sizing: border-box;
+  }
+  .formula-dialog-title {
+    font-size: 16px;
+    font-weight: 700;
+    color: var(--ink);
+    margin: 0 0 4px;
+  }
+  .formula-dialog-hint {
+    font-size: 12px;
+    color: var(--muted);
+    margin: 0 0 6px;
+    line-height: 1.5;
+  }
+  .formula-row-list {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    overflow-y: auto;
+    margin: 8px 0 12px;
+    padding-right: 2px;
+  }
+  .formula-row-card {
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 10px;
+    background: var(--card-bg);
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .formula-row-topline {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .formula-name-input {
+    flex: 1;
+    font-weight: 600;
+  }
+  .formula-expr-input {
+    width: 100%;
+    box-sizing: border-box;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+  .formula-remove-btn {
+    flex: none;
+    width: 24px;
+    height: 24px;
+    border: none;
+    background: none;
+    color: var(--muted);
+    font-size: 18px;
+    line-height: 1;
+    cursor: pointer;
+    border-radius: 6px;
+  }
+  .formula-remove-btn:hover {
+    background: var(--tint);
+    color: var(--accent-text);
+  }
+  .formula-error {
+    font-size: 11px;
+    color: #D0362C;
+    min-height: 14px;
+  }
+  .formula-format-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 10px;
+  }
+  .formula-format-field {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 11px;
+    color: var(--muted);
+  }
+  /* These reuse .control for its border/font/etc., but aren't dropdowns —
+     drop the inherited select-chevron background. */
+  .formula-name-input, .formula-expr-input, .formula-format-input {
+    background-image: none;
+  }
+  .formula-format-input {
+    width: 52px;
+    padding: 5px 7px;
+  }
+  .formula-thousands-field {
+    cursor: pointer;
+  }
+  .formula-thousands-field input[type="checkbox"] {
+    accent-color: var(--accent);
+    width: 13px;
+    height: 13px;
+    cursor: pointer;
+  }
+  .formula-add-btn {
+    align-self: flex-start;
+    border: 1px dashed var(--border);
+    background: none;
+    color: var(--accent-text);
+    font-size: 12px;
+    font-weight: 600;
+    padding: 7px 12px;
+    border-radius: 8px;
+    cursor: pointer;
+    font-family: inherit;
+  }
+  .formula-add-btn:hover {
+    background: var(--tint);
+  }
+  .formula-dialog-actions {
+    margin-top: auto;
+    padding-top: 14px;
+    border-top: 1px solid var(--border);
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+  }
+  .formula-cancel-btn, .formula-save-btn {
+    border-radius: 8px;
+    font-size: 13px;
+    font-weight: 600;
+    padding: 8px 16px;
+    cursor: pointer;
+    font-family: inherit;
+  }
+  .formula-cancel-btn {
+    border: 1px solid var(--border);
+    background: #FFFFFF;
+    color: var(--ink);
+  }
+  .formula-cancel-btn:hover {
+    background: #FAFAFB;
+  }
+  .formula-save-btn {
+    border: none;
+    background: var(--accent);
+    color: #FFFFFF;
+  }
+  .formula-save-btn:hover {
+    background: var(--accent-text);
+  }
 </style>
 </head>
 <body>
@@ -690,7 +866,12 @@
     chartType: 'line',
     hiddenMetrics: [],
     axisAdjustEnabled: false,
-    axisOverrides: {}
+    axisOverrides: {},
+    // Author-defined calculated-metric formulas (see the "Author-defined
+    // formula metrics" block above) — each entry is
+    // { outputName, expression, format, ast }. Set via the Configure
+    // dialog only; there is no viewer-facing UI for this.
+    formulaDefs: []
   };
 
   var rawRows = [];
@@ -751,6 +932,165 @@
   function isAdditiveMetric(mc) {
     return !mc.agg || !!ADDITIVE_AGGREGATIONS[mc.agg];
   }
+
+  // --- Author-defined formula metrics -------------------------------------
+  //
+  // Editor-only escape hatch for exactly the case isAdditiveMetric/AVG can't
+  // solve generically: a ratio metric like CPM needs SUM(Cost)/SUM(Impressions)
+  // recomputed fresh at whatever bucket grain is selected, which requires
+  // knowing the formula — something the Extensions API never exposes for a
+  // Tableau calculated field. An author who DOES know the formula can define
+  // it here (via the Configure dialog), referencing other metrics already on
+  // the Marks card with Tableau-style [Bracket] syntax; the bucketing code
+  // (recomputeAndRenderData) evaluates it against each bucket's freshly
+  // summed component values, giving an exact result instead of an
+  // approximation. See FormulaError/tokenizeFormula/parseFormulaTokens/
+  // evalFormulaAst/parseFormulaExpression below, and applyFormulaDefs /
+  // openFormulaConfigDialog / initFormulaDialog further down for the
+  // settings + dialog plumbing.
+
+  function FormulaError(message, pos) {
+    this.message = message;
+    this.pos = pos;
+  }
+  FormulaError.prototype = Object.create(Error.prototype);
+
+  function tokenizeFormula(expr) {
+    var tokens = [];
+    var i = 0;
+    var n = expr.length;
+    while (i < n) {
+      var c = expr[i];
+      if (c === ' ' || c === '\t' || c === '\n' || c === '\r') { i++; continue; }
+      if (c === '(') { tokens.push({ type: 'lparen', pos: i }); i++; continue; }
+      if (c === ')') { tokens.push({ type: 'rparen', pos: i }); i++; continue; }
+      if (c === '+' || c === '-' || c === '*' || c === '/') { tokens.push({ type: 'op', value: c, pos: i }); i++; continue; }
+      if (c === '[') {
+        var close = expr.indexOf(']', i + 1);
+        if (close === -1) throw new FormulaError('Missing closing "]" for a field reference', i);
+        var name = expr.slice(i + 1, close).trim();
+        if (!name) throw new FormulaError('Empty field reference "[]"', i);
+        tokens.push({ type: 'name', value: name, pos: i });
+        i = close + 1;
+        continue;
+      }
+      if (/[0-9.]/.test(c)) {
+        var start = i;
+        while (i < n && /[0-9.]/.test(expr[i])) i++;
+        var numStr = expr.slice(start, i);
+        var num = parseFloat(numStr);
+        if (isNaN(num)) throw new FormulaError('Invalid number "' + numStr + '"', start);
+        tokens.push({ type: 'num', value: num, pos: start });
+        continue;
+      }
+      throw new FormulaError('Unexpected character "' + c + '"', i);
+    }
+    return tokens;
+  }
+
+  // Recursive-descent parser: expr := term (('+'|'-') term)*;
+  // term := factor (('*'|'/') factor)*; factor := '-' factor | '(' expr ')' |
+  // NUMBER | '[' NAME ']'. Precedence and associativity match ordinary
+  // arithmetic, same as a Tableau calculated-field expression would.
+  function parseFormulaTokens(tokens) {
+    var pos = 0;
+    function peek() { return tokens[pos]; }
+    function advance() { return tokens[pos++]; }
+
+    function parseExpr() {
+      var node = parseTerm();
+      while (peek() && peek().type === 'op' && (peek().value === '+' || peek().value === '-')) {
+        var opTok = advance();
+        node = { type: 'bin', op: opTok.value, left: node, right: parseTerm() };
+      }
+      return node;
+    }
+    function parseTerm() {
+      var node = parseFactor();
+      while (peek() && peek().type === 'op' && (peek().value === '*' || peek().value === '/')) {
+        var opTok = advance();
+        node = { type: 'bin', op: opTok.value, left: node, right: parseFactor() };
+      }
+      return node;
+    }
+    function parseFactor() {
+      var t = peek();
+      if (!t) throw new FormulaError('Formula ends unexpectedly', -1);
+      if (t.type === 'op' && t.value === '-') { advance(); return { type: 'neg', value: parseFactor() }; }
+      if (t.type === 'op' && t.value === '+') { advance(); return parseFactor(); }
+      if (t.type === 'lparen') {
+        advance();
+        var inner = parseExpr();
+        var close = advance();
+        if (!close || close.type !== 'rparen') throw new FormulaError('Missing closing ")"', close ? close.pos : -1);
+        return inner;
+      }
+      if (t.type === 'num') { advance(); return { type: 'num', value: t.value }; }
+      if (t.type === 'name') { advance(); return { type: 'ref', name: t.value }; }
+      throw new FormulaError('Unexpected "' + (t.value || t.type) + '"', t.pos);
+    }
+
+    var ast = parseExpr();
+    if (pos < tokens.length) throw new FormulaError('Unexpected token after end of formula', tokens[pos].pos);
+    return ast;
+  }
+
+  function collectFormulaRefs(node, out) {
+    out = out || [];
+    if (!node) return out;
+    if (node.type === 'ref') { if (out.indexOf(node.name) === -1) out.push(node.name); }
+    else if (node.type === 'neg') collectFormulaRefs(node.value, out);
+    else if (node.type === 'bin') { collectFormulaRefs(node.left, out); collectFormulaRefs(node.right, out); }
+    return out;
+  }
+
+  // valuesByName holds each referenced metric's SUMMED value for one
+  // (bucket, series) pair — summing components first and dividing once
+  // here is what makes this exact rather than an approximation. A missing
+  // reference or divide-by-zero propagates as null (rendered as 0, same
+  // "no data" convention used everywhere else in this file).
+  function evalFormulaAst(node, valuesByName) {
+    switch (node.type) {
+      case 'num': return node.value;
+      case 'ref': {
+        var v = valuesByName[node.name];
+        return (v === undefined || v === null || isNaN(v)) ? null : v;
+      }
+      case 'neg': {
+        var v2 = evalFormulaAst(node.value, valuesByName);
+        return v2 === null ? null : -v2;
+      }
+      case 'bin': {
+        var l = evalFormulaAst(node.left, valuesByName);
+        var r = evalFormulaAst(node.right, valuesByName);
+        if (l === null || r === null) return null;
+        if (node.op === '+') return l + r;
+        if (node.op === '-') return l - r;
+        if (node.op === '*') return l * r;
+        return r === 0 ? null : l / r;
+      }
+      default: return null;
+    }
+  }
+
+  // Single entry point used by both the dialog's live validation and the
+  // render pipeline's def-loading step. Never throws — a bad expression
+  // comes back as { ast: null, refs: [], error: '...' } so callers can
+  // display the message (dialog) or just skip the metric (renderer).
+  function parseFormulaExpression(expr) {
+    expr = (expr || '').trim();
+    if (!expr) return { ast: null, refs: [], error: 'Formula is empty' };
+    try {
+      var tokens = tokenizeFormula(expr);
+      if (tokens.length === 0) return { ast: null, refs: [], error: 'Formula is empty' };
+      var ast = parseFormulaTokens(tokens);
+      return { ast: ast, refs: collectFormulaRefs(ast), error: null };
+    } catch (e) {
+      return { ast: null, refs: [], error: e.message || 'Invalid formula' };
+    }
+  }
+
+  // --- end formula metrics core; settings/dialog plumbing is further down.
 
   // Reverse-engineers a metric's Tableau number format (currency symbol, %,
   // decimals, thousands separator) by comparing a raw value against its
@@ -1105,6 +1445,37 @@
         };
       });
       return { name: mc.name, format: mc.format, series: series };
+    });
+
+    // Author-defined formula metrics (see applyFormulaDefs / the "Author-
+    // defined formula metrics" block near the top of the file): evaluated
+    // per (bucket, series) against that bucket's freshly-SUMMED component
+    // values, which is the exact way to re-derive a ratio at a coarser
+    // grain — not an approximation like the AGG/AVG averaging above. If
+    // outputName matches an existing metric, this replaces its computed
+    // values/format in place (same card, same position); otherwise it's
+    // appended as a new metric.
+    state.formulaDefs.forEach(function (def) {
+      if (!def.ast) return;
+      var series = seriesKeys.map(function (sk, si) {
+        var entry = legendEntries ? legendEntries[si] : null;
+        return {
+          key: sk,
+          label: entry ? entry.label : null,
+          color: entry ? entry.color : null,
+          values: bucketList.map(function (b) {
+            var sumsByName = {};
+            metricColumns.forEach(function (mc, i) { sumsByName[mc.name] = b.series[sk].sums[i]; });
+            var v = evalFormulaAst(def.ast, sumsByName);
+            return v === null || isNaN(v) ? 0 : v;
+          })
+        };
+      });
+      var computed = { name: def.outputName, format: def.format, series: series };
+      var existingIdx = -1;
+      lastMetrics.forEach(function (m, idx) { if (m.name === def.outputName) existingIdx = idx; });
+      if (existingIdx !== -1) lastMetrics[existingIdx] = computed;
+      else lastMetrics.push(computed);
     });
 
     if (!appBuilt) buildApp();
@@ -1990,8 +2361,17 @@
       onChange(input.value);
     });
 
+    // Purely decorative — the native icon is still there underneath
+    // (invisible via ::-webkit-calendar-picker-indicator, see CSS) and
+    // still the thing actually receiving the click, since this has
+    // pointer-events: none.
+    var icon = document.createElement('span');
+    icon.className = 'date-field-icon';
+    icon.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2"></rect><line x1="16" y1="2" x2="16" y2="6"></line><line x1="8" y1="2" x2="8" y2="6"></line><line x1="3" y1="10" x2="21" y2="10"></line></svg>';
+
     el.appendChild(input);
     el.appendChild(display);
+    el.appendChild(icon);
     return { el: el, input: input };
   }
 
@@ -2641,14 +3021,19 @@
     var metricsGroup = buildToolbarGroup('Metrics');
     var metricsDropdown = buildMultiSelectDropdown({
       label: 'Metrics',
-      options: metricColumns.map(function (mc) { return { value: mc.name, label: mc.name }; }),
+      // Sourced from lastMetrics (not metricColumns) so a formula metric
+      // with a brand-new name — one that doesn't override an existing
+      // Tableau field — shows up here too. Safe to read here: buildToolbar
+      // only runs from inside buildApp, which recomputeAndRenderData calls
+      // after lastMetrics (including formula metrics) is already built.
+      options: lastMetrics.map(function (m) { return { value: m.name, label: m.name }; }),
       getSelected: function () {
-        return metricColumns
-          .map(function (mc) { return mc.name; })
+        return lastMetrics
+          .map(function (m) { return m.name; })
           .filter(function (name) { return state.hiddenMetrics.indexOf(name) === -1; });
       },
       onApply: function (selected) {
-        var all = metricColumns.map(function (mc) { return mc.name; });
+        var all = lastMetrics.map(function (m) { return m.name; });
         state.hiddenMetrics = all.filter(function (name) { return selected.indexOf(name) === -1; });
         saveSettings();
         renderGrid();
@@ -2784,8 +3169,52 @@
 
       var savedAxisOverrides = settings.get('axisOverrides');
       if (savedAxisOverrides) state.axisOverrides = JSON.parse(savedAxisOverrides);
+
+      var savedFormulaDefs = settings.get('formulaDefs');
+      if (savedFormulaDefs) applyFormulaDefs(JSON.parse(savedFormulaDefs));
     } catch (e) {
       // no saved settings yet; defaults stand
+    }
+  }
+
+  // Parses each stored { outputName, expression, format } into a render-
+  // ready state.formulaDefs entry with a parsed `ast` (null if the
+  // expression doesn't currently parse — recomputeAndRenderData skips
+  // those rather than throwing, so one bad formula can't break the rest).
+  // Also the single place format gets normalized to the {prefix, suffix,
+  // multiplier, decimals, thousands} shape formatMetricValue/
+  // formatCompactLabel expect — multiplier is always 1 here since, unlike
+  // Tableau's own auto-detected formats, the formula itself already
+  // produces the exact number to display (any scaling belongs in the
+  // expression, e.g. "* 100" for a percentage).
+  function applyFormulaDefs(rawDefs) {
+    state.formulaDefs = (rawDefs || []).map(function (def) {
+      var parsed = parseFormulaExpression(def.expression);
+      var f = def.format || {};
+      return {
+        outputName: def.outputName,
+        expression: def.expression,
+        format: {
+          prefix: f.prefix || '',
+          suffix: f.suffix || '',
+          multiplier: 1,
+          decimals: f.decimals !== undefined && f.decimals !== null ? f.decimals : 2,
+          thousands: !!f.thousands
+        },
+        ast: parsed.ast
+      };
+    });
+  }
+
+  function persistFormulaDefs() {
+    try {
+      var settings = tableau.extensions.settings;
+      settings.set('formulaDefs', JSON.stringify(state.formulaDefs.map(function (d) {
+        return { outputName: d.outputName, expression: d.expression, format: d.format };
+      })));
+      settings.saveAsync();
+    } catch (e) {
+      // ignore persistence failures
     }
   }
 
@@ -3160,6 +3589,255 @@
     });
   }
 
+  // --- Configure dialog (editor-only formula editor) ----------------------
+  //
+  // Tableau only shows "Configure..." on this extension's own context menu
+  // while a dashboard AUTHOR is editing it — never in a published/viewed
+  // dashboard — so this is the correct native mechanism for "visible only
+  // to me, not the end user" rather than anything we'd have to build and
+  // police ourselves. Clicking it calls openFormulaConfigDialog below,
+  // which opens THIS SAME FILE again in a separate dialog window with
+  // ?dialog=formulas appended to its URL; initFormulaDialog (see the
+  // isDialogMode branch at the very bottom of the file) detects that and
+  // renders the editor form instead of the normal chart grid.
+
+  function openFormulaConfigDialog() {
+    var payload = JSON.stringify({
+      formulaDefs: state.formulaDefs.map(function (d) {
+        return { outputName: d.outputName, expression: d.expression, format: d.format };
+      }),
+      availableMetricNames: metricColumns.map(function (mc) { return mc.name; })
+    });
+    var popupUrl = location.origin + location.pathname + '?dialog=formulas';
+    tableau.extensions.ui.displayDialogAsync(popupUrl, payload, { height: 640, width: 560 }).then(function (closePayload) {
+      var result = JSON.parse(closePayload);
+      applyFormulaDefs(result.formulaDefs);
+      persistFormulaDefs();
+      recomputeAndRenderData();
+    }).catch(function (error) {
+      // DialogClosedByUser just means they hit the window's own close
+      // button instead of our Cancel/Save — nothing to do either way.
+      if (!error || error.errorCode !== tableau.ErrorCodes.DialogClosedByUser) {
+        showMessage('Configure dialog error: ' + (error && error.message ? error.message : error));
+      }
+    });
+  }
+
+  // Entry point when this file is loaded as the dialog itself (see the
+  // isDialogMode branch at the bottom) rather than as the worksheet
+  // extension — completely separate render path, reusing the same CSS
+  // (and #app element) but none of the chart-grid code above.
+  function initFormulaDialog() {
+    appEl.innerHTML = '';
+    appEl.classList.add('formula-dialog');
+    tableau.extensions.initializeDialogAsync().then(function (openPayload) {
+      var initial = {};
+      try { initial = JSON.parse(openPayload || '{}'); } catch (e) { /* malformed payload — start blank */ }
+      renderFormulaDialogUI(initial.formulaDefs || [], initial.availableMetricNames || []);
+    });
+  }
+
+  function renderFormulaDialogUI(initialDefs, availableNames) {
+    var rows = initialDefs.map(function (d) {
+      var fmt = d.format || {};
+      return {
+        outputName: d.outputName || '',
+        expression: d.expression || '',
+        prefix: fmt.prefix || '',
+        suffix: fmt.suffix || '',
+        decimals: fmt.decimals !== undefined && fmt.decimals !== null ? fmt.decimals : 2,
+        thousands: !!fmt.thousands
+      };
+    });
+
+    var wrap = document.createElement('div');
+    wrap.className = 'formula-dialog-wrap';
+
+    var heading = document.createElement('h2');
+    heading.className = 'formula-dialog-title';
+    heading.textContent = 'Calculated Metric Formulas';
+    wrap.appendChild(heading);
+
+    var hint = document.createElement('p');
+    hint.className = 'formula-dialog-hint';
+    hint.textContent = availableNames.length
+      ? 'Reference other metrics with brackets, e.g. [Cost] / [Impressions] * 1000. Available: ' +
+        availableNames.map(function (n) { return '[' + n + ']'; }).join(', ')
+      : 'Reference other metrics with brackets, e.g. [Cost] / [Impressions] * 1000.';
+    wrap.appendChild(hint);
+
+    var note = document.createElement('p');
+    note.className = 'formula-dialog-hint';
+    note.textContent = 'If the metric name matches an existing one, this replaces how it’s calculated. A new name adds a new metric card.';
+    wrap.appendChild(note);
+
+    var listEl = document.createElement('div');
+    listEl.className = 'formula-row-list';
+    wrap.appendChild(listEl);
+
+    var addBtn = document.createElement('button');
+    addBtn.type = 'button';
+    addBtn.className = 'formula-add-btn';
+    addBtn.textContent = '+ Add Formula';
+    addBtn.addEventListener('click', function () {
+      rows.push({ outputName: '', expression: '', prefix: '', suffix: '', decimals: 2, thousands: false });
+      renderRows();
+    });
+    wrap.appendChild(addBtn);
+
+    var actions = document.createElement('div');
+    actions.className = 'formula-dialog-actions';
+    var cancelBtn = document.createElement('button');
+    cancelBtn.type = 'button';
+    cancelBtn.className = 'formula-cancel-btn';
+    cancelBtn.textContent = 'Cancel';
+    cancelBtn.addEventListener('click', function () {
+      tableau.extensions.ui.closeDialog(JSON.stringify({ formulaDefs: initialDefs }));
+    });
+    var saveBtn = document.createElement('button');
+    saveBtn.type = 'button';
+    saveBtn.className = 'formula-save-btn';
+    saveBtn.textContent = 'Save';
+    saveBtn.addEventListener('click', function () {
+      var payload = rows
+        .filter(function (r) { return r.outputName.trim() && r.expression.trim(); })
+        .map(function (r) {
+          return {
+            outputName: r.outputName.trim(),
+            expression: r.expression.trim(),
+            format: {
+              prefix: r.prefix,
+              suffix: r.suffix,
+              decimals: Math.max(0, parseInt(r.decimals, 10) || 0),
+              thousands: !!r.thousands
+            }
+          };
+        });
+      tableau.extensions.ui.closeDialog(JSON.stringify({ formulaDefs: payload }));
+    });
+    actions.appendChild(cancelBtn);
+    actions.appendChild(saveBtn);
+    wrap.appendChild(actions);
+
+    appEl.appendChild(wrap);
+
+    function renderRows() {
+      listEl.innerHTML = '';
+      rows.forEach(function (row, idx) {
+        listEl.appendChild(buildFormulaRow(row, idx));
+      });
+    }
+
+    function fmtField(labelText, inputEl) {
+      var f = document.createElement('label');
+      f.className = 'formula-format-field';
+      var lbl = document.createElement('span');
+      lbl.textContent = labelText;
+      f.appendChild(lbl);
+      f.appendChild(inputEl);
+      return f;
+    }
+
+    function buildFormulaRow(row, idx) {
+      var card = document.createElement('div');
+      card.className = 'formula-row-card';
+
+      var topLine = document.createElement('div');
+      topLine.className = 'formula-row-topline';
+
+      var nameInput = document.createElement('input');
+      nameInput.type = 'text';
+      nameInput.className = 'control formula-name-input';
+      nameInput.placeholder = 'Metric name (e.g. CPM)';
+      nameInput.value = row.outputName;
+      nameInput.addEventListener('input', function () { row.outputName = nameInput.value; });
+      topLine.appendChild(nameInput);
+
+      var removeBtn = document.createElement('button');
+      removeBtn.type = 'button';
+      removeBtn.className = 'formula-remove-btn';
+      removeBtn.textContent = '×';
+      removeBtn.title = 'Remove';
+      removeBtn.addEventListener('click', function () {
+        rows.splice(idx, 1);
+        renderRows();
+      });
+      topLine.appendChild(removeBtn);
+      card.appendChild(topLine);
+
+      var exprInput = document.createElement('input');
+      exprInput.type = 'text';
+      exprInput.className = 'control formula-expr-input';
+      exprInput.placeholder = '[Cost] / [Impressions] * 1000';
+      exprInput.value = row.expression;
+      card.appendChild(exprInput);
+
+      var errorEl = document.createElement('div');
+      errorEl.className = 'formula-error';
+      card.appendChild(errorEl);
+
+      function validate() {
+        var expr = exprInput.value.trim();
+        row.expression = expr;
+        if (!expr) { errorEl.textContent = ''; return; }
+        var parsed = parseFormulaExpression(expr);
+        if (parsed.error) {
+          errorEl.textContent = parsed.error;
+          return;
+        }
+        var unknown = parsed.refs.filter(function (r) { return availableNames.indexOf(r) === -1; });
+        errorEl.textContent = unknown.length
+          ? 'Unknown metric: ' + unknown.map(function (n) { return '[' + n + ']'; }).join(', ')
+          : '';
+      }
+      exprInput.addEventListener('input', validate);
+      validate();
+
+      var fmtRow = document.createElement('div');
+      fmtRow.className = 'formula-format-row';
+
+      var prefixInput = document.createElement('input');
+      prefixInput.type = 'text';
+      prefixInput.className = 'control formula-format-input';
+      prefixInput.value = row.prefix;
+      prefixInput.addEventListener('input', function () { row.prefix = prefixInput.value; });
+      fmtRow.appendChild(fmtField('Prefix', prefixInput));
+
+      var suffixInput = document.createElement('input');
+      suffixInput.type = 'text';
+      suffixInput.className = 'control formula-format-input';
+      suffixInput.value = row.suffix;
+      suffixInput.addEventListener('input', function () { row.suffix = suffixInput.value; });
+      fmtRow.appendChild(fmtField('Suffix', suffixInput));
+
+      var decimalsInput = document.createElement('input');
+      decimalsInput.type = 'number';
+      decimalsInput.min = '0';
+      decimalsInput.max = '6';
+      decimalsInput.className = 'control formula-format-input';
+      decimalsInput.value = String(row.decimals);
+      decimalsInput.addEventListener('input', function () { row.decimals = decimalsInput.value; });
+      fmtRow.appendChild(fmtField('Decimals', decimalsInput));
+
+      var thousandsWrap = document.createElement('label');
+      thousandsWrap.className = 'formula-format-field formula-thousands-field';
+      var thousandsInput = document.createElement('input');
+      thousandsInput.type = 'checkbox';
+      thousandsInput.checked = row.thousands;
+      thousandsInput.addEventListener('change', function () { row.thousands = thousandsInput.checked; });
+      var thousandsLbl = document.createElement('span');
+      thousandsLbl.textContent = 'Thousands separator';
+      thousandsWrap.appendChild(thousandsInput);
+      thousandsWrap.appendChild(thousandsLbl);
+      fmtRow.appendChild(thousandsWrap);
+
+      card.appendChild(fmtRow);
+      return card;
+    }
+
+    renderRows();
+  }
+
   // Single shared listener (not one per card/render) that restores whichever
   // card had its dragging suspended for a slider interaction.
   document.addEventListener('mouseup', function () {
@@ -3175,29 +3853,39 @@
     resizeTimer = setTimeout(updateLabelVisibility, 150);
   });
 
-  tableau.extensions.initializeAsync().then(function () {
-    var worksheet = tableau.extensions.worksheetContent.worksheet;
-    cachedWorksheet = worksheet;
+  // This same file doubles as the Configure dialog's own page (see
+  // openFormulaConfigDialog) — ?dialog=formulas in the URL is how it tells
+  // the two apart. Everything above this point (state, helpers, the whole
+  // chart-grid pipeline) is shared; only this final branch differs.
+  var isDialogMode = /(^|[?&])dialog=formulas(&|$)/.test(location.search);
 
-    loadSettings();
-    Promise.all([
-      loadWeekStartParameter(worksheet),
-      loadSplitsParameter(worksheet),
-      loadFilters(worksheet)
-    ]).then(function () {
-      ensureDefaultDateRange();
-      refresh(worksheet);
-    });
+  if (isDialogMode) {
+    initFormulaDialog();
+  } else {
+    tableau.extensions.initializeAsync({ configure: openFormulaConfigDialog }).then(function () {
+      var worksheet = tableau.extensions.worksheetContent.worksheet;
+      cachedWorksheet = worksheet;
 
-    worksheet.addEventListener(tableau.TableauEventType.SummaryDataChanged, function () {
-      refresh(worksheet);
+      loadSettings();
+      Promise.all([
+        loadWeekStartParameter(worksheet),
+        loadSplitsParameter(worksheet),
+        loadFilters(worksheet)
+      ]).then(function () {
+        ensureDefaultDateRange();
+        refresh(worksheet);
+      });
+
+      worksheet.addEventListener(tableau.TableauEventType.SummaryDataChanged, function () {
+        refresh(worksheet);
+      });
+      worksheet.addEventListener(tableau.TableauEventType.FilterChanged, function () {
+        loadFilters(worksheet);
+      });
+    }).catch(function (err) {
+      showMessage('Failed to initialize extension: ' + (err && err.message ? err.message : err));
     });
-    worksheet.addEventListener(tableau.TableauEventType.FilterChanged, function () {
-      loadFilters(worksheet);
-    });
-  }).catch(function (err) {
-    showMessage('Failed to initialize extension: ' + (err && err.message ? err.message : err));
-  });
+  }
 })();
 </script>
 </body>
